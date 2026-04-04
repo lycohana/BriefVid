@@ -15,7 +15,17 @@ const elements = {
 let renderedViewKey = "";
 
 bootstrap().catch((error) => {
-  elements.viewRoot.innerHTML = `<div class="grid-card empty-state">${error.message || "页面初始化失败"}</div>`;
+  elements.viewRoot.innerHTML = `<div class="grid-card empty-state">
+    <div class="empty-detail">
+      <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <h3>页面初始化失败</h3>
+      <p>${escapeHtml(error.message || "未知错误")}</p>
+    </div>
+  </div>`;
 });
 
 async function bootstrap() {
@@ -61,15 +71,17 @@ function bindNavigation() {
 }
 
 function bindViewEvents() {
-  elements.viewRoot.addEventListener("submit", async (event) => {
+  elements.viewRoot.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     if (form.id === "probe-form") {
-      await handleProbeSubmit(event);
+      event.preventDefault();
+      handleProbeSubmit(event).catch(console.error);
       return;
     }
     if (form.id === "settings-form") {
-      await handleSettingsSubmit(event);
+      event.preventDefault();
+      handleSettingsSubmit(event).catch(console.error);
     }
   });
 
@@ -106,6 +118,17 @@ function bindViewEvents() {
     const videoCard = target.closest("[data-video-id]");
     if (videoCard instanceof HTMLElement) {
       await handleVideoAction("open-video", { videoId: videoCard.dataset.videoId });
+    }
+  });
+  
+  // 支持键盘导航视频卡片
+  elements.viewRoot.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      const videoCard = event.target.closest("[data-video-id]");
+      if (videoCard instanceof HTMLElement) {
+        event.preventDefault();
+        await handleVideoAction("open-video", { videoId: videoCard.dataset.videoId });
+      }
     }
   });
 }
@@ -248,6 +271,9 @@ async function handleVideoAction(action, dataset) {
   }
 
   if (action === "delete-video" && dataset.videoId) {
+    if (!confirm("确定要删除这个视频吗？这将同时删除所有相关任务。")) {
+      return;
+    }
     try {
       await api.deleteVideo(dataset.videoId);
       if (state.selectedVideoId === dataset.videoId) {
@@ -272,6 +298,9 @@ async function handleVideoAction(action, dataset) {
   }
 
   if (action === "delete-task" && dataset.taskId) {
+    if (!confirm("确定要删除这个任务吗？")) {
+      return;
+    }
     try {
       await api.deleteTask(dataset.taskId);
       if (state.selectedTaskId === dataset.taskId) {
@@ -578,15 +607,17 @@ function renderLiveStatus(errorMessage) {
   return `
     <div class="status-card"><strong>服务状态</strong><div class="status-caption">${state.serviceOnline ? "运行中" : "不可访问"}</div></div>
     <div class="status-card"><strong>视频数量</strong><div class="status-caption">${state.videos.length}</div></div>
-    <div class="status-card"><strong>最近视频</strong><div class="status-caption">${latestTitle}</div></div>
-    <div class="status-card"><strong>最近状态</strong><div class="status-caption">${latestStatus}</div></div>
-    ${errorMessage ? `<div class="status-card"><strong>错误</strong><div class="status-caption">${errorMessage}</div></div>` : ""}
+    <div class="status-card"><strong>最近视频</strong><div class="status-caption">${escapeHtml(latestTitle)}</div></div>
+    <div class="status-card"><strong>最近状态</strong><div class="status-caption">${escapeHtml(latestStatus)}</div></div>
+    ${errorMessage ? `<div class="status-card"><strong>错误</strong><div class="status-caption">${escapeHtml(errorMessage)}</div></div>` : ""}
   `;
 }
 
 function highlightNav() {
   for (const item of elements.nav.querySelectorAll("[data-route]")) {
-    item.classList.toggle("active", item.dataset.route === state.route);
+    const isActive = item.dataset.route === state.route;
+    item.classList.toggle("active", isActive);
+    item.setAttribute("aria-selected", String(isActive));
   }
 }
 
@@ -649,4 +680,12 @@ function closeTaskEventStream() {
 
 function snapshot() {
   return JSON.stringify(getRenderState());
+}
+
+// 简单的 HTML 转义函数（用于错误消息）
+function escapeHtml(str) {
+  if (typeof str !== "string") return str;
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
 }

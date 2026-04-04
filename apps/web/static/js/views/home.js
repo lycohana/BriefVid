@@ -120,18 +120,30 @@ function renderLibraryRegions(state) {
     intake: `
       <article class="grid-card library-intake-card">
         <div class="panel-header">
-          <h2>开始总结</h2>
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="16"></line>
+              <line x1="12" y1="12" x2="16" y2="12"></line>
+            </svg>
+            开始总结
+          </h2>
           <p>输入视频链接后，系统会抓取封面和标题，并立即开始本地总结。</p>
         </div>
         <form id="probe-form" class="task-form">
-          <label class="input-group">
+          <label class="input-row">
             <span class="input-label">视频链接</span>
-            <input id="probe-url-input" type="url" class="input-field" placeholder="https://www.bilibili.com/video/..." required />
+            <input id="probe-url-input" type="url" class="input-field" placeholder="https://www.bilibili.com/video/..." required autocomplete="url" />
           </label>
           <div class="hero-actions">
-            <button class="primary-button" type="submit">开始总结</button>
+            <button class="primary-button" type="submit">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              开始总结
+            </button>
           </div>
-          ${state.submitStatus ? `<div class="submit-status">${escapeHtml(state.submitStatus)}</div>` : ""}
+          ${state.submitStatus ? `<div class="submit-status ${state.submitStatus.includes('成功') ? 'success' : state.submitStatus.includes('失败') ? 'error' : ''}">${escapeHtml(state.submitStatus)}</div>` : ""}
         </form>
         ${state.probePreview ? renderProbePreview(state.probePreview) : ""}
       </article>
@@ -139,25 +151,50 @@ function renderLibraryRegions(state) {
     summary: `
       <article class="grid-card library-summary-card">
         <div class="panel-header">
-          <h2>视频库概览</h2>
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+            </svg>
+            视频库概览
+          </h2>
           <p>封面、本地缓存和任务结果统一管理</p>
         </div>
         <div class="library-summary-grid">
-          <div class="summary-metric"><strong>${state.videos.length}</strong><span>视频总数</span></div>
-          <div class="summary-metric"><strong>${state.videos.filter((item) => item.latest_status === "completed").length}</strong><span>已完成</span></div>
-          <div class="summary-metric"><strong>${state.videos.filter((item) => item.latest_status === "running").length}</strong><span>处理中</span></div>
-          <div class="summary-metric"><strong>${state.videos.filter((item) => item.has_result).length}</strong><span>有摘要结果</span></div>
+          <div class="summary-metric">
+            <strong>${state.videos.length}</strong>
+            <span>视频总数</span>
+          </div>
+          <div class="summary-metric">
+            <strong>${state.videos.filter((item) => item.latest_status === "completed").length}</strong>
+            <span>已完成</span>
+          </div>
+          <div class="summary-metric">
+            <strong>${state.videos.filter((item) => item.latest_status === "running").length}</strong>
+            <span>处理中</span>
+          </div>
+          <div class="summary-metric">
+            <strong>${state.videos.filter((item) => item.has_result).length}</strong>
+            <span>有摘要结果</span>
+          </div>
         </div>
       </article>
     `,
     grid: `
       <section class="grid-card library-grid-card">
         <div class="panel-header">
-          <h2>视频库</h2>
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+            视频库
+          </h2>
           <p>${state.videos.length} 个视频资产，点击卡片打开详情子页</p>
         </div>
         <div class="library-toolbar">
-          <input id="library-search" class="input-field" type="search" value="${escapeHtml(state.librarySearch)}" placeholder="搜索标题或链接" />
+          <input id="library-search" class="input-field" type="search" value="${escapeHtml(state.librarySearch)}" placeholder="搜索标题或链接..." aria-label="搜索视频" />
         </div>
         <div id="library-list-region" class="video-grid">
           ${videos.length ? videos.map((video) => renderVideoCard(video)).join("") : renderEmptyLibrary()}
@@ -173,9 +210,16 @@ function renderVideoDetailPage(state) {
   if (!video) {
     return `
       <article class="grid-card video-detail-empty">
-        <h3>没有找到这个视频</h3>
-        <p>它可能已被删除，或者本地服务还没有同步到最新数据。</p>
-        <button class="secondary-button" data-action="back-library">返回视频库</button>
+        <div class="empty-detail">
+          <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <h3>没有找到这个视频</h3>
+          <p>它可能已被删除，或者本地服务还没有同步到最新数据。</p>
+          <button class="secondary-button" data-action="back-library" style="margin-top: 16px;">返回视频库</button>
+        </div>
       </article>
     `;
   }
@@ -184,7 +228,13 @@ function renderVideoDetailPage(state) {
   return `
     <section class="video-detail-page">
       <div class="detail-page-toolbar">
-        <button class="secondary-button" data-action="back-library">返回视频库</button>
+        <button class="secondary-button" data-action="back-library">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+          返回视频库
+        </button>
       </div>
 
       <div id="video-detail-hero-region">${regions.hero}</div>
@@ -209,21 +259,44 @@ function renderVideoDetailRegions(state) {
   return {
     hero: `
       <article class="video-detail-hero">
-        <a class="video-detail-cover" href="${escapeHtml(video.source_url)}" target="_blank" rel="noreferrer" aria-label="打开视频原链接">
+        <a class="video-detail-cover" href="${escapeHtml(video.source_url)}" target="_blank" rel="noreferrer" aria-label="打开视频原链接：${escapeHtml(video.title)}">
           ${video.cover_url ? `<img src="${escapeHtml(video.cover_url)}" alt="${escapeHtml(video.title)}" loading="lazy" />` : `<div class="video-card-placeholder">VIDEO</div>`}
         </a>
         <div class="video-detail-copy">
           <div class="hero-chip-row">
-            <span class="service-badge ${video.latest_status === "completed" ? "service-online" : "service-offline"}">${escapeHtml(taskStatusLabel(video.latest_status))}</span>
+            <span class="mini-chip ${video.latest_status === 'completed' ? 'success' : video.latest_status === 'running' ? 'running' : ''}">${escapeHtml(taskStatusLabel(video.latest_status))}</span>
             <span class="mini-chip">${escapeHtml(formatDuration(video.duration))}</span>
             <span class="mini-chip">${escapeHtml(formatDateTime(video.updated_at))}</span>
           </div>
           <h1 class="video-detail-title">${escapeHtml(video.title)}</h1>
           <div class="detail-hero-actions">
-            <button class="primary-button" data-action="start-task" data-video-id="${video.video_id}">${video.latest_task_id ? "重新总结" : "开始总结"}</button>
-            <button class="secondary-button" data-action="refresh-video" data-video-id="${video.video_id}" data-video-url="${escapeHtml(video.source_url)}">重新获取视频信息</button>
-            ${latestTask ? `<button class="secondary-button" data-action="delete-task" data-task-id="${latestTask.task_id}">删除当前任务</button>` : ""}
-            <button class="secondary-button danger-outline" data-action="delete-video" data-video-id="${video.video_id}">删除视频</button>
+            <button class="primary-button" data-action="start-task" data-video-id="${video.video_id}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              ${video.latest_task_id ? "重新总结" : "开始总结"}
+            </button>
+            <button class="secondary-button" data-action="refresh-video" data-video-id="${video.video_id}" data-video-url="${escapeHtml(video.source_url)}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+              刷新信息
+            </button>
+            ${latestTask ? `<button class="secondary-button" data-action="delete-task" data-task-id="${latestTask.task_id}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+              </svg>
+              删除当前任务
+            </button>` : ""}
+            <button class="secondary-button danger-outline" data-action="delete-video" data-video-id="${video.video_id}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+              </svg>
+              删除视频
+            </button>
           </div>
         </div>
       </article>
@@ -232,7 +305,15 @@ function renderVideoDetailRegions(state) {
       <section class="video-detail-primary">
         <article class="grid-card detail-section-card">
           <div class="panel-header">
-            <h2>摘要结果</h2>
+            <h2>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              摘要结果
+            </h2>
             <p>当前视频的最新结果</p>
           </div>
           ${video.latest_result ? renderResultPanels(video.latest_result) : `<div class="empty-placeholder">当前还没有可展示的摘要结果。</div>`}
@@ -242,7 +323,13 @@ function renderVideoDetailRegions(state) {
     progress: `
       <article class="grid-card detail-side-card">
         <div class="panel-header">
-          <h2>处理进度</h2>
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            处理进度
+          </h2>
           <p>${latestTask ? `当前任务 ${escapeHtml(latestTask.task_id.slice(0, 8))}` : "尚未开始处理"}</p>
         </div>
         ${latestTask ? renderTaskProgressSimple(events) : `<div class="empty-placeholder">点击"开始总结"后，这里会展示处理进度。</div>`}
@@ -251,7 +338,13 @@ function renderVideoDetailRegions(state) {
     history: `
       <article class="grid-card detail-side-card">
         <div class="panel-header">
-          <h2>任务历史</h2>
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            任务历史
+          </h2>
           <p>${state.selectedVideoTasks.length} 条任务记录</p>
         </div>
         <div class="task-history-list">
@@ -284,7 +377,7 @@ function renderVideoCard(video) {
           ? "status-failed"
           : "status-pending";
   return `
-    <article class="video-card" data-video-id="${video.video_id}">
+    <article class="video-card" data-video-id="${video.video_id}" role="button" tabindex="0" aria-label="打开视频详情：${escapeHtml(video.title)}">
       <div class="video-card-cover">
         ${video.cover_url ? `<img src="${escapeHtml(video.cover_url)}" alt="${escapeHtml(video.title)}" loading="lazy" />` : `<div class="video-card-placeholder">VIDEO</div>`}
         <span class="video-duration">${escapeHtml(formatDuration(video.duration))}</span>
@@ -306,15 +399,17 @@ function renderTaskProgressSimple(events) {
 
   return `
     <div class="task-progress-simple">
-      <div id="task-progress-bar" class="progress-bar-simple" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(view.progress)}">
-        <div id="task-progress-fill" class="progress-fill-simple ${fillClass}" style="width: ${view.progress}%"></div>
-      </div>
-      <div class="progress-info-simple">
-        <span id="task-progress-percent" class="progress-percent-simple">${Math.round(view.progress)}%</span>
-        <span id="task-progress-status" class="progress-status-simple">${view.headlineEvent ? escapeHtml(view.headlineEvent.message) : "等待开始..."}</span>
+      <div class="progress-bar-wrapper">
+        <div id="task-progress-bar" class="progress-bar-simple" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(view.progress)}" aria-label="任务进度">
+          <div id="task-progress-fill" class="progress-fill-simple ${fillClass}" style="width: ${view.progress}%"></div>
+        </div>
+        <div class="progress-info-simple">
+          <span id="task-progress-percent" class="progress-percent-simple">${Math.round(view.progress)}%</span>
+          <span id="task-progress-status" class="progress-status-simple">${view.headlineEvent ? escapeHtml(view.headlineEvent.message) : "等待开始..."}</span>
+        </div>
       </div>
 
-      <details id="task-progress-details" class="progress-stage-card">
+      <details class="progress-stage-card">
         <summary>
           <div>
             <strong id="task-progress-title">${escapeHtml(view.title)}</strong>
@@ -334,25 +429,46 @@ function renderResultPanels(result) {
   return `
     <div class="detail-result-stack">
       <section class="grid-card result-card">
-        <div class="card-header"><h3>摘要概览</h3></div>
+        <div class="card-header">
+          <h3>摘要概览</h3>
+        </div>
         <div class="timeline ${result.overview ? "" : "empty-state"}">
           ${result.overview ? `<p>${escapeHtml(result.overview)}</p>` : `<div class="empty-placeholder">暂无摘要概览</div>`}
         </div>
       </section>
       <section class="grid-card result-card">
-        <div class="card-header"><h3>关键要点</h3><span class="result-count">${result.key_points?.length || 0} 条</span></div>
+        <div class="card-header">
+          <h3>关键要点</h3>
+          <span class="result-count">${result.key_points?.length || 0} 条</span>
+        </div>
         <ul class="bullet-list ${result.key_points?.length ? "" : "empty-state"}">
           ${result.key_points?.length ? result.key_points.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : `<div class="empty-placeholder">暂无关键要点</div>`}
         </ul>
       </section>
       <section class="grid-card result-card">
-        <div class="card-header"><h3>时间轴</h3><span class="result-count">${result.timeline?.length || 0} 段</span></div>
+        <div class="card-header">
+          <h3>时间轴</h3>
+          <span class="result-count">${result.timeline?.length || 0} 段</span>
+        </div>
         <div class="timeline ${result.timeline?.length ? "" : "empty-state"}">
-          ${result.timeline?.length ? result.timeline.map((item, index) => `<article class="timeline-item"><div class="timeline-marker">${index + 1}</div><div class="timeline-content"><h4>${escapeHtml(item.title || "章节")}</h4><div class="timeline-meta">${escapeHtml(formatDuration(item.start))}</div><p>${escapeHtml(item.summary || "")}</p></div></article>`).join("") : `<div class="empty-placeholder">暂无时间轴</div>`}
+          ${result.timeline?.length ? result.timeline.map((item, index) => `
+            <article class="timeline-item">
+              <div class="timeline-marker" aria-hidden="true">${index + 1}</div>
+              <div class="timeline-content">
+                <h4>${escapeHtml(item.title || "章节")}</h4>
+                <div class="timeline-meta">
+                  <span class="timeline-time">${escapeHtml(formatDuration(item.start))}</span>
+                </div>
+                <p>${escapeHtml(item.summary || "")}</p>
+              </div>
+            </article>
+          `).join("") : `<div class="empty-placeholder">暂无时间轴</div>`}
         </div>
       </section>
       <section class="grid-card transcript-card">
-        <div class="card-header"><h3>转写全文</h3></div>
+        <div class="card-header">
+          <h3>转写全文</h3>
+        </div>
         <pre class="transcript ${result.transcript_text ? "" : "empty-state"}">${escapeHtml(result.transcript_text || "暂无转写全文")}</pre>
       </section>
     </div>
@@ -366,46 +482,57 @@ function renderTaskHistoryItemSimple(task, selectedTaskId) {
                       task.status === "running" ? "status-running" : "status-pending";
   
   return `
-    <details class="task-history-item-simple ${active ? "active" : ""}" ${active ? "open" : ""}>
-      <summary class="task-history-header" data-action="select-task" data-task-id="${task.task_id}">
-        <div class="task-history-item-main">
-          <span class="task-history-item-status ${statusClass}">${escapeHtml(taskStatusLabel(task.status))}</span>
-          <span class="task-history-item-time">${escapeHtml(formatDateTime(task.created_at))}</span>
+    <details class="task-history-item ${active ? "active" : ""}" ${active ? "open" : ""}>
+      <summary class="task-history-summary" data-action="select-task" data-task-id="${task.task_id}">
+        <div class="task-history-main">
+          <span class="task-history-status ${statusClass}">${escapeHtml(taskStatusLabel(task.status))}</span>
+          <span class="task-history-time">${escapeHtml(formatDateTime(task.created_at))}</span>
         </div>
-        <div class="task-history-item-side">
+        <div class="task-history-meta">
           ${active ? `<span class="task-history-item-current">当前查看</span>` : ""}
-          <span class="task-history-item-toggle">展开详细</span>
+          <span class="task-history-id">${escapeHtml(task.task_id.slice(0, 8))}</span>
+          <svg class="expand-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
         </div>
       </summary>
-      <div class="task-history-item-details">
-        <div class="task-history-detail-row">
-          <span class="task-history-detail-label">任务 ID</span>
-          <span class="task-history-detail-value code">${escapeHtml(task.task_id)}</span>
+      <div class="task-history-details">
+        <div class="task-history-info">
+          <div class="info-row">
+            <span class="info-label">任务 ID</span>
+            <span class="info-value code">${escapeHtml(task.task_id)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">创建时间</span>
+            <span class="info-value">${escapeHtml(formatDateTime(task.created_at))}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">更新时间</span>
+            <span class="info-value">${escapeHtml(formatDateTime(task.updated_at))}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">LLM Token</span>
+            <span class="info-value">${escapeHtml(formatTokenCount(task.llm_total_tokens))}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">任务耗时</span>
+            <span class="info-value">${escapeHtml(formatTaskDuration(task.task_duration_seconds))}</span>
+          </div>
+          ${task.error_message ? `
+          <div class="info-row error">
+            <span class="info-label">错误信息</span>
+            <span class="info-value">${escapeHtml(task.error_message)}</span>
+          </div>
+          ` : ""}
         </div>
-        <div class="task-history-detail-row">
-          <span class="task-history-detail-label">创建时间</span>
-          <span class="task-history-detail-value">${escapeHtml(formatDateTime(task.created_at))}</span>
-        </div>
-        <div class="task-history-detail-row">
-          <span class="task-history-detail-label">更新时间</span>
-          <span class="task-history-detail-value">${escapeHtml(formatDateTime(task.updated_at))}</span>
-        </div>
-        <div class="task-history-detail-row">
-          <span class="task-history-detail-label">LLM Token</span>
-          <span class="task-history-detail-value">${escapeHtml(formatTokenCount(task.llm_total_tokens))}</span>
-        </div>
-        <div class="task-history-detail-row">
-          <span class="task-history-detail-label">任务耗时</span>
-          <span class="task-history-detail-value">${escapeHtml(formatTaskDuration(task.task_duration_seconds))}</span>
-        </div>
-        ${task.error_message ? `
-        <div class="task-history-detail-row error">
-          <span class="task-history-detail-label">错误信息</span>
-          <span class="task-history-detail-value">${escapeHtml(task.error_message)}</span>
-        </div>
-        ` : ""}
-        <div class="task-history-item-actions">
-          <button class="tertiary-button danger" data-action="delete-task" data-task-id="${task.task_id}">删除</button>
+        <div class="task-history-actions">
+          <button class="tertiary-button danger" data-action="delete-task" data-task-id="${task.task_id}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+            </svg>
+            删除
+          </button>
         </div>
       </div>
     </details>
@@ -438,5 +565,14 @@ function renderStageEventCard(event, stages, currentEvent, failedEvent) {
 }
 
 function renderEmptyLibrary() {
-  return `<div class="empty-placeholder">还没有视频，先输入一个链接开始总结。</div>`;
+  return `
+    <div class="empty-placeholder">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 12px; opacity: 0.5;" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <p>还没有视频，先输入一个链接开始总结。</p>
+    </div>
+  `;
 }

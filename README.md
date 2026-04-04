@@ -1,69 +1,75 @@
 # 本地视频总结服务
 
-这是一个正在重构中的本地优先视频总结项目。
+一个本地优先的 B 站视频总结项目。
 
-目标不是继续维护“浏览器插件驱动的脚本工具”，而是重建成一个可以长期维护的本地产品：
+当前仓库已经不是单纯的“重构骨架”，而是一个可以本地跑通的开发版：后端服务、SQLite 持久化、任务执行链路和基础 Web UI 都已经接上了。
 
-- 核心能力全部本地运行
-- 后台服务是系统核心
-- 浏览器扩展只是快捷入口
-- 本地 UI 和扩展共用同一套 API
-- 后续支持 Windows / macOS / Linux
+## 当前能力
 
-## 当前进度
+- 输入 B 站视频链接并探测视频信息
+- 自动缓存封面、维护本地视频列表
+- 提交总结任务并在后台线程执行
+- 使用 `yt-dlp` 下载音频
+- 使用 `faster-whisper` 执行转写
+- 可选调用 OpenAI-compatible LLM 生成结构化摘要
+- 将任务、事件、结果保存到 SQLite
+- 导出 `transcript.txt` 和 `summary.json`
+- 提供本地 Web UI、REST API 和 SSE 进度流
 
-当前仓库已经完成第一批基础骨架：
-
-- `packages/core`
-  - 放核心领域模型和 pipeline 抽象
-- `packages/infra`
-  - 放配置、路径、日志、应用元信息
-- `apps/service`
-  - 放本地 FastAPI 后台服务
-
-目前已经具备：
-
-- 健康检查接口
-- 系统信息接口
-- 最小任务创建接口
-- 最小任务查询接口
-- SQLite 持久化任务仓库雏形
-- 最小任务事件记录
-- 最小后台 worker 占位执行
-
-## 当前目录
+## 项目结构
 
 ```text
 apps/
-  service/          本地后台服务
+  service/          FastAPI 后端服务
+  web/              本地 Web UI 静态资源
 packages/
-  core/             核心处理能力
-  infra/            配置、日志、路径等基础设施
+  core/             下载、转写、摘要等核心能力
+  infra/            配置、路径、日志等基础设施
+scripts/
+  run_service.ps1   本地启动服务
+  submit_task.ps1   命令行提交任务
 tests/
-  unit/             当前基础单元测试
+  unit/             基础单元测试
 docs/
-  architecture/     架构与启动说明
+  architecture/     架构说明与启动笔记
 ```
 
-## 本地启动
+## 运行要求
 
-### 1. 准备 Python 环境
+- Python `3.12`
+- 建议提前安装 `ffmpeg` 并确保已加入 `PATH`
+- 首次转写时会按需下载 Whisper 模型
+- 如果要启用 LLM 摘要，需要可用的 OpenAI-compatible 接口
 
-建议使用 Python 3.12。
+## 快速开始
 
-### 2. 安装本地包
+### 1. 安装本地包
 
 ```powershell
 python -m pip install -e .\packages\infra -e .\packages\core -e .\apps\service
 ```
 
-建议同时准备 `.env`：
+### 2. 准备环境变量
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-然后把 `.env` 里的 LLM 配置改成你自己的值。
+默认 `.env.example` 已包含一组示例配置：
+
+```env
+VIDEO_SUM_HOST=127.0.0.1
+VIDEO_SUM_PORT=3838
+VIDEO_SUM_WHISPER_MODEL=tiny
+VIDEO_SUM_WHISPER_DEVICE=cpu
+VIDEO_SUM_WHISPER_COMPUTE_TYPE=int8
+VIDEO_SUM_LLM_ENABLED=true
+VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1
+VIDEO_SUM_LLM_MODEL=qwen3.5-plus
+VIDEO_SUM_LLM_API_KEY=replace-with-your-api-key
+```
+
+如果你暂时不想接 LLM，可以把 `VIDEO_SUM_LLM_ENABLED=false`，服务会退回本地规则摘要。
 
 ### 3. 启动服务
 
@@ -71,77 +77,79 @@ Copy-Item .env.example .env
 python -m video_sum_service
 ```
 
-也可以直接运行：
+或使用脚本：
 
 ```powershell
 .\scripts\run_service.ps1
 ```
 
-### 4. 访问接口
+### 4. 打开页面
 
 - `http://127.0.0.1:3838/`
 - `http://127.0.0.1:3838/health`
 - `http://127.0.0.1:3838/api/v1/system/info`
-- `http://127.0.0.1:3838/api/v1/tasks`
 
-其中：
+首页是当前本地 Web UI，后端 API 统一挂在 `/api/v1/*`。
 
-- `/` 是当前本地 Web UI 入口
-- `/api/v1/*` 是后端 API
+## 常用接口
 
-## 当前 API
+### 系统与设置
 
-### `GET /health`
+- `GET /health`
+- `GET /api/v1/system/info`
+- `GET /api/v1/environment`
+- `GET /api/v1/settings`
+- `PUT /api/v1/settings`
+- `POST /api/v1/cuda/install`
 
-返回服务存活状态。
+### 视频
 
-### `GET /api/v1/system/info`
+- `POST /api/v1/videos/probe`
+- `GET /api/v1/videos`
+- `GET /api/v1/videos/{video_id}`
+- `DELETE /api/v1/videos/{video_id}`
+- `GET /api/v1/videos/{video_id}/tasks`
+- `POST /api/v1/videos/{video_id}/tasks`
 
-返回应用版本、服务配置、任务状态枚举等基础信息。
+`POST /api/v1/videos/probe` 请求体示例：
 
-### `POST /api/v1/tasks`
+```json
+{
+  "url": "https://www.bilibili.com/video/BV1R6NFzXE1H/",
+  "force_refresh": false
+}
+```
 
-创建一个最小任务。
+### 任务
 
-请求体示例：
+- `POST /api/v1/tasks`
+- `GET /api/v1/tasks`
+- `GET /api/v1/tasks/{task_id}`
+- `GET /api/v1/tasks/{task_id}/result`
+- `GET /api/v1/tasks/{task_id}/progress`
+- `GET /api/v1/tasks/{task_id}/events`
+- `GET /api/v1/tasks/{task_id}/events/stream`
+- `DELETE /api/v1/tasks/{task_id}`
+
+`POST /api/v1/tasks` 请求体示例：
 
 ```json
 {
   "input_type": "url",
-  "source": "https://www.bilibili.com/video/BV1xx411c7mD",
+  "source": "https://www.bilibili.com/video/BV1R6NFzXE1H/",
   "title": "示例视频"
 }
 ```
 
-### `GET /api/v1/tasks`
+## 命令行示例
 
-返回当前任务列表。
-
-### `GET /api/v1/tasks/{task_id}`
-
-返回单个任务详情。
-
-### `GET /api/v1/tasks/{task_id}/result`
-
-返回当前任务详情和结果占位。
-
-### `GET /api/v1/tasks/{task_id}/events`
-
-返回当前任务的事件流记录。
-
-### `GET /api/v1/tasks/{task_id}/events/stream`
-
-返回当前任务的实时事件流，前端任务页会用它做更跟手的进度更新。
-
-## 示例用法
-
-启动服务后，可以直接提交一个 B 站链接：
+直接提交一个任务：
 
 ```powershell
 .\scripts\submit_task.ps1 -Url "https://www.bilibili.com/video/BV1R6NFzXE1H/"
 ```
 
-如果你想带标题：
+带标题提交：
 
 ```powershell
 .\scripts\submit_task.ps1 `
@@ -149,54 +157,31 @@ python -m video_sum_service
   -Title "我被手表的睡眠评分，骗焦虑了好几年？【差评君】"
 ```
 
-## 已验证状态
+脚本会轮询 `/api/v1/tasks/{task_id}/result`，直到任务进入终态。
 
-下面这些已经在当前机器上实际验证通过：
+## 结果落盘
 
-- `python -m pytest`
-- `python -m video_sum_service`
-- `GET /health`
-- `POST /api/v1/tasks`
-- `GET /api/v1/tasks`
-- `GET /api/v1/tasks/{task_id}/result`
-- `GET /api/v1/tasks/{task_id}/events`
-- `GET /api/v1/tasks/{task_id}/events/stream`
+默认数据目录在仓库根目录下的 `.data/`：
 
-当前任务执行链路已经可运行，但还是 placeholder pipeline：
+- `.data/video_sum.db`：SQLite 数据库
+- `.data/cache/`：缓存资源和封面
+- `.data/tasks/<task_id>/transcript.txt`：转写文本
+- `.data/tasks/<task_id>/summary.json`：结构化摘要结果
 
-仓库当前已经接入真实处理链路雏形：
+## 测试
 
-- `yt_dlp` 下载 B 站音频
-- `faster-whisper` 执行转写
-- 可选 LLM 摘要
-- SQLite 持久化任务、结果和事件
-- 导出 `transcript.txt` 和 `summary.json`
-
-但它仍然属于第一版可用链路，还没有做：
-
-- 缓存复用
-- 取消/重试
-- 字幕优先策略
-- 更完整的错误恢复
-- 正式前端界面
+```powershell
+python -m pytest
+```
 
 ## 当前限制
 
-当前还只是架构起步阶段，下面这些能力还没接入：
-
-- 正式任务队列
-- 实际下载、转写、摘要处理
-- 历史记录和缓存
-- 本地桌面 UI
-- 浏览器扩展改造
-
-说明：
-
-- 当前任务已经落到 SQLite
-- 已接入最小 `task_results` 和 `task_events` 表
-- 已有最小后台线程 worker
-- 已接入任务页实时事件流
-- 但还没有正式队列、取消、重试
+- 当前真实执行链路只支持 B 站视频 URL
+- 后台执行仍是轻量线程 worker，不是正式任务队列
+- 还没有取消、重试、并发调度和缓存复用策略
+- `ffmpeg` 依赖目前默认要求本机自行准备
+- 首次模型下载和首次转写可能会比较慢
+- Web UI 目前是开发态界面，不是最终桌面端交付形态
 
 ## 相关文档
 
@@ -204,22 +189,3 @@ python -m video_sum_service
 - [`REFACTOR_TASK_BREAKDOWN.md`](./REFACTOR_TASK_BREAKDOWN.md)
 - [`docs/architecture/bootstrap.md`](./docs/architecture/bootstrap.md)
 - [`PACKAGING_INSTALL_PLAN.md`](./PACKAGING_INSTALL_PLAN.md)
-
-## 下一步
-
-接下来优先推进：
-
-1. SQLite 数据模型
-2. 任务仓库与事件流
-3. `POST /api/v1/tasks` 到 pipeline 的执行链路
-4. 历史记录与结果查询
-
-## 安装版目标
-
-当前仓库已经达到开发态可用，但最终目标是可安装版。
-
-后续实现会以这条交付线为准：
-
-- 后端打包为独立可执行文件
-- 桌面 UI 负责托管服务
-- 最终交付 MSI / DMG / AppImage
