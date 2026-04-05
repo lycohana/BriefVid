@@ -63,7 +63,9 @@
           ]
         }
       ],
-      "icon": "../../apps/web/static/favicon.ico"
+      "icon": "../../apps/web/static/favicon.ico",
+      "signAndEditExecutable": false,
+      "signDlls": false
     },
     "nsis": {
       "oneClick": false,

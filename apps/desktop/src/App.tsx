@@ -39,7 +39,7 @@ export function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
-  const [desktop, setDesktop] = useState<DesktopState>({ version: "0.1.0", backend: null, logPath: "" });
+  const [desktop, setDesktop] = useState<DesktopState>({ version: "", backend: null, logPath: "" });
   const [query, setQuery] = useState("");
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [probeUrl, setProbeUrl] = useState("");

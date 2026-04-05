@@ -367,6 +367,7 @@ npm run build
 npm run package:win
 python -m video_sum_service
 python -m pytest -q
+python scripts/bump_version.py --check
 ```
 
 这些命令的含义分别是：
@@ -376,6 +377,7 @@ python -m pytest -q
 - `npm run package:win`: 执行完整 Windows 合包，包含 `onedir` 后端和 Electron 安装包
 - `python -m video_sum_service`: 单独启动 FastAPI 后端，适合只调接口
 - `python -m pytest -q`: 运行当前单元测试
+- `python scripts/bump_version.py --check`: 检查所有版本文件是否与根目录 `VERSION` 同步
 
 ### 调试说明
 
@@ -402,6 +404,21 @@ python -m pytest -q
 - [`README.md`](README.md)
 - [`packaging/pyinstaller/README.md`](packaging/pyinstaller/README.md)
 - [`packaging/desktop/build_windows.ps1`](packaging/desktop/build_windows.ps1)
+
+### 版本与发版
+
+- 单一版本源为根目录 `VERSION`
+- 同步脚本为 `python scripts/bump_version.py patch|minor|major`
+- 校验脚本为 `python scripts/bump_version.py --check`
+- GitHub Actions 会在推送到 `main` 或 `master` 后自动判断是否发版
+- 自动 bump 规则如下：
+  - `feat:` -> `minor`
+  - `fix:` / `perf:` / `refactor:` -> `patch`
+  - `feat!:`、`fix!:`、`perf!:`、`refactor!:` 或提交正文包含 `BREAKING CHANGE` -> `major`
+  - `docs:`、`chore:`、`ci:` 等默认不发版
+- 自动发版前会先在 GitHub Actions 的 Windows runner 上真实执行一次 `npm run package:win`
+- 只有 Windows 打包预检通过，才会提交版本号、创建 tag 并继续发布
+- 自动创建版本提交后，会打 `vX.Y.Z` tag，并触发 Windows 打包与 GitHub Release 上传
 
 ---
 

@@ -1,0 +1,129 @@
+name: Prepare Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect-release:
+    if: ${{ github.event.head_commit != null && !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    outputs:
+      bump: ${{ steps.detect.outputs.bump }}
+      next_version: ${{ steps.detect.outputs.next_version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Detect bump level
+        id: detect
+        run: python scripts/detect_bump.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Stop when no release is needed
+        if: ${{ steps.detect.outputs.bump == '' }}
+        run: echo "No release bump detected for this push."
+
+  validate-windows-package:
+    needs: detect-release
+    if: ${{ needs.detect-release.outputs.bump != '' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install uv
+        run: python -m pip install --upgrade pip uv
+
+      - name: Apply release version for validation build
+        run: python scripts/bump_version.py "${{ needs.detect-release.outputs.bump }}"
+
+      - name: Verify version files are synced
+        run: python scripts/bump_version.py --check
+
+      - name: Install desktop dependencies
+        run: npm ci --prefix apps/desktop
+
+      - name: Prepare electron-builder cache
+        shell: pwsh
+        run: |
+          $winCodeSignDir = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
+          $darwinLibDir = Join-Path $winCodeSignDir "darwin\10.12\lib"
+          New-Item -ItemType Directory -Force -Path $darwinLibDir | Out-Null
+          "2.6.0" | Out-File -FilePath (Join-Path $winCodeSignDir ".version") -Encoding utf8
+          foreach ($name in @("libcrypto.dylib", "libssl.dylib")) {
+            $target = Join-Path $darwinLibDir $name
+            if (-not (Test-Path $target)) {
+              New-Item -ItemType File -Force -Path $target | Out-Null
+            }
+          }
+
+      - name: Build Windows release candidate
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_PLATFORM: "windows"
+        run: npm run package:win
+
+  create-release-tag:
+    needs:
+      - detect-release
+      - validate-windows-package
+    if: ${{ needs.detect-release.outputs.bump != '' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bump repository version
+        run: python scripts/bump_version.py "${{ needs.detect-release.outputs.bump }}"
+
+      - name: Commit release version and tag
+        env:
+          RELEASE_VERSION: ${{ needs.detect-release.outputs.next_version }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION pyproject.toml apps/service/pyproject.toml packages/core/pyproject.toml packages/infra/pyproject.toml apps/desktop/package.json apps/desktop/package-lock.json
+          git commit -m "chore(release): v${RELEASE_VERSION} [skip ci]"
+          git tag "v${RELEASE_VERSION}"
+          git push origin "HEAD:${TARGET_BRANCH}" --follow-tags
