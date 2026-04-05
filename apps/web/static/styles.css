@@ -578,7 +578,18 @@ body {
   background: rgba(254, 226, 226, 0.4);
 }
 
+.secondary-button.danger-button {
+  color: var(--color-error);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(254, 226, 226, 0.4);
+}
+
 .secondary-button.danger-outline:hover {
+  background: var(--color-error-bg);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.secondary-button.danger-button:hover {
   background: var(--color-error-bg);
   border-color: rgba(239, 68, 68, 0.5);
 }
@@ -781,6 +792,13 @@ body {
 .textarea-field {
   resize: vertical;
   min-height: 80px;
+}
+
+.log-viewer {
+  min-height: 12rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  font-family: "Cascadia Mono", "Consolas", monospace;
 }
 
 /* 切换行 */

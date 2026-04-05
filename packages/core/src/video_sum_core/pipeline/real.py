@@ -19,6 +19,13 @@ from video_sum_core.errors import UnsupportedInputError, VideoSumError
 from video_sum_core.models.tasks import InputType, TaskResult
 from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineEventReporter, PipelineRunner
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
+from video_sum_infra.runtime import (
+    ffmpeg_location,
+    runtime_library_dirs,
+    runtime_python_executable,
+    runtime_worker_executable,
+    sanitized_subprocess_dll_search,
+)
 
 logger = logging.getLogger("video_sum_core.pipeline.real")
 
@@ -78,6 +85,7 @@ def _extract_json_object_text(value: str) -> str:
 @dataclass(slots=True)
 class PipelineSettings:
     tasks_dir: Path
+    runtime_channel: str = "base"
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
@@ -278,6 +286,9 @@ class RealPipelineRunner(PipelineRunner):
                 }
             ],
         }
+        ffmpeg_dir = ffmpeg_location()
+        if ffmpeg_dir is not None:
+            options["ffmpeg_location"] = str(ffmpeg_dir)
         with YoutubeDL(options) as ydl:
             ydl.download([url])
         candidates = sorted(task_dir.glob(f"{safe_title}.*"))
@@ -405,39 +416,44 @@ class RealPipelineRunner(PipelineRunner):
         if output_path.exists():
             output_path.unlink()
 
-        command = [
-            sys.executable,
-            "-m",
-            "video_sum_core.transcribe_subprocess",
-            "--audio-path",
-            str(audio_path),
-            "--model",
-            model_name,
-            "--device",
-            device,
-            "--compute-type",
-            compute_type,
-            "--progress-path",
-            str(progress_path),
-            "--output-path",
-            str(output_path),
-        ]
+        command = self._build_transcription_command(
+            audio_path=audio_path,
+            model_name=model_name,
+            device=device,
+            compute_type=compute_type,
+            progress_path=progress_path,
+            output_path=output_path,
+        )
         if duration is not None:
             command.extend(["--duration", str(duration)])
 
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+        runtime_paths = [str(path) for path in runtime_library_dirs(self._settings.runtime_channel)]
+        ffmpeg_dir = ffmpeg_location()
+        if ffmpeg_dir is not None:
+            runtime_paths.append(str(ffmpeg_dir))
+        env["VIDEO_SUM_DLL_PATHS"] = os.pathsep.join(runtime_paths)
+        merged_path: list[str] = []
+        for entry in [*runtime_paths, *(env.get("PATH", "").split(os.pathsep))]:
+            item = entry.strip()
+            if item and item not in merged_path:
+                merged_path.append(item)
+        env["PATH"] = os.pathsep.join(merged_path)
         creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            creationflags=creationflags,
-        )
+        with sanitized_subprocess_dll_search():
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(audio_path.parent),
+                creationflags=creationflags,
+            )
 
         progress_offset = 0
         timeout_seconds = max(30 * 60, int((duration or 0) * 8) + 10 * 60)
@@ -515,6 +531,40 @@ class RealPipelineRunner(PipelineRunner):
         if not transcript.strip():
             raise VideoSumError("Transcription produced empty output.")
         return transcript, segments
+
+    def _build_transcription_command(
+        self,
+        audio_path: Path,
+        model_name: str,
+        device: str,
+        compute_type: str,
+        progress_path: Path,
+        output_path: Path,
+    ) -> list[str]:
+        worker_executable = runtime_worker_executable(self._settings.runtime_channel)
+        if worker_executable is not None:
+            command = [str(worker_executable)]
+        else:
+            runtime_python = runtime_python_executable(self._settings.runtime_channel) or Path(sys.executable)
+            command = [str(runtime_python), "-m", "video_sum_service.transcribe_worker"]
+
+        command.extend(
+            [
+                "--audio-path",
+                str(audio_path),
+                "--model",
+                model_name,
+                "--device",
+                device,
+                "--compute-type",
+                compute_type,
+                "--progress-path",
+                str(progress_path),
+                "--output-path",
+                str(output_path),
+            ]
+        )
+        return command
 
     def _should_retry_transcription(self, error: VideoSumError) -> bool:
         message = str(error)

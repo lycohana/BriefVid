@@ -31,6 +31,7 @@ export function renderSettingsView(state) {
           ${renderEnvCard("yt-dlp", env.ytDlpVersion || "未安装", env.ytDlpVersion ? "success" : "warning")}
           ${renderEnvCard("faster-whisper", env.fasterWhisperVersion || "未安装", env.fasterWhisperVersion ? "success" : "warning")}
           ${renderEnvCard("Python", env.pythonVersion || "-", "neutral")}
+          ${renderEnvCard("运行时通道", env.runtimeChannel || settings.runtime_channel || "base", "neutral")}
         </div>
 
         <!-- CUDA 操作区 -->
@@ -64,6 +65,18 @@ export function renderSettingsView(state) {
               ${escapeHtml(state.cudaActionStatus)}
             </div>
           ` : ''}
+          ${state.cudaInstallOutput ? `
+            <label class="input-row">
+              <span class="input-label">CUDA 安装输出</span>
+              <textarea class="textarea-field log-viewer" rows="8" readonly>${escapeHtml(state.cudaInstallOutput)}</textarea>
+            </label>
+          ` : ''}
+          ${env.runtimeError ? `
+            <label class="input-row">
+              <span class="input-label">运行时错误详情</span>
+              <textarea class="textarea-field log-viewer" rows="8" readonly>${escapeHtml(env.runtimeError)}</textarea>
+            </label>
+          ` : ''}
         </div>
       </article>
 
@@ -90,6 +103,7 @@ export function renderSettingsView(state) {
             ${renderInput("cache_dir", "缓存目录", settings.cache_dir || "", "text", "/path/to/cache")}
             ${renderInput("tasks_dir", "任务目录", settings.tasks_dir || "", "text", "/path/to/tasks")}
             ${renderInput("database_url", "数据库", settings.database_url || "", "text", "sqlite:///data.db")}
+            ${renderSelect("runtime_channel", "运行时通道", settings.runtime_channel || "base", buildRuntimeChannelOptions(settings))}
           </section>
 
           <!-- 转写模型 -->
@@ -196,6 +210,7 @@ export function renderSettingsView(state) {
           ${renderRow("LLM 启用", settings.llm_enabled ? "✓ 是" : "✗ 否", settings.llm_enabled ? "success" : "neutral")}
           ${renderRow("LLM Base URL", settings.llm_base_url || "-", settings.llm_base_url ? "success" : "neutral")}
           ${renderRow("LLM 模型", settings.llm_model || "-", settings.llm_model ? "success" : "neutral")}
+          ${renderRow("运行时通道", settings.runtime_channel || "base", "neutral")}
           ${renderRow("摘要模式", settings.summary_mode || "-", "neutral")}
           ${renderRow("分块大小", String(settings.summary_chunk_target_chars || "-"), "neutral")}
           ${renderRow("分块并发", String(settings.summary_chunk_concurrency || "-"), "neutral")}
@@ -220,7 +235,41 @@ export function renderSettingsView(state) {
           ${renderRow("服务名", info.application?.name || "-")}
           ${renderRow("版本", info.application?.version || "-")}
           ${renderRow("任务状态", (info.taskModel?.statuses || []).join(", ") || "-")}
+          ${renderRow("日志文件", info.service?.log_file || state.logPath || "-", "neutral")}
         </div>
+      </article>
+
+      <!-- 日志与控制 -->
+      <article class="grid-card settings-wide">
+        <div class="panel-header">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            日志与控制
+          </h2>
+          <p>查看后端日志，并直接关闭当前后端服务</p>
+        </div>
+        <div class="settings-actions">
+          <button id="refresh-logs" class="secondary-button" type="button">刷新日志</button>
+          <button id="shutdown-service" class="secondary-button danger-button" type="button">关闭后端服务</button>
+        </div>
+        ${state.serviceActionStatus ? `
+          <div class="action-status ${state.serviceActionStatus.includes('失败') ? 'error' : ''}">
+            ${escapeHtml(state.serviceActionStatus)}
+          </div>
+        ` : ''}
+        <label class="input-row">
+          <span class="input-label">当前日志文件</span>
+          <input class="input-field" value="${escapeHtml(state.logPath || info.service?.log_file || '')}" readonly />
+        </label>
+        <label class="input-row">
+          <span class="input-label">最近日志</span>
+          <textarea class="textarea-field log-viewer" rows="16" readonly>${escapeHtml(state.logOutput || "")}</textarea>
+        </label>
       </article>
 
       <!-- 关于 -->
@@ -319,4 +368,17 @@ function renderTextarea(id, label, value, rows) {
       >${escapeHtml(value)}</textarea>
     </label>
   `;
+}
+
+function buildRuntimeChannelOptions(settings) {
+  const options = [
+    { value: "base", label: "base (CPU 基础运行时)" },
+  ];
+  for (const value of ["gpu-cu124", "gpu-cu126", "gpu-cu128"]) {
+    options.push({
+      value,
+      label: `${value}${settings.runtime_channel === value ? " (当前)" : ""}`,
+    });
+  }
+  return options;
 }

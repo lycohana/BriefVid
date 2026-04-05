@@ -17,6 +17,14 @@ export const api = {
   getEnvironment() {
     return fetchJson("/api/v1/environment");
   },
+  getSystemLogs(lines = 200) {
+    return fetchJson(`/api/v1/system/logs?lines=${lines}`);
+  },
+  shutdownService() {
+    return fetchJson("/api/v1/system/shutdown", {
+      method: "POST",
+    });
+  },
   getSettings() {
     return fetchJson("/api/v1/settings");
   },

@@ -110,6 +110,16 @@ function bindViewEvents() {
       return;
     }
 
+    if (target.closest("#refresh-logs")) {
+      await handleRefreshLogs();
+      return;
+    }
+
+    if (target.closest("#shutdown-service")) {
+      await handleShutdownService();
+      return;
+    }
+
     if (target.closest("#install-cuda")) {
       await handleInstallCuda();
       return;
@@ -148,6 +158,7 @@ async function refreshApp({ fullView = false } = {}) {
     state.settings = settings;
     state.environment = environment;
     state.videos = videos;
+    state.logPath = systemInfo?.service?.log_file || state.logPath;
 
     if (!state.selectedVideoId && videos.length) {
       state.selectedVideoId = videos[0].video_id;
@@ -353,6 +364,7 @@ async function handleSettingsSubmit(event) {
     model_mode: readValue("model_mode", current.model_mode || "fixed"),
     fixed_model: readValue("fixed_model", current.fixed_model || "tiny"),
     cuda_variant: readValue("cuda_variant", current.cuda_variant || "cu128"),
+    runtime_channel: readValue("runtime_channel", current.runtime_channel || "base"),
     output_dir: readTrimmedValue("output_dir", current.output_dir || ""),
     preserve_temp_audio: readChecked("preserve_temp_audio", Boolean(current.preserve_temp_audio)),
     enable_cache: readChecked("enable_cache", Boolean(current.enable_cache)),
@@ -398,17 +410,59 @@ async function handleRefreshEnvironment() {
   render({ fullView: true });
 }
 
+async function handleRefreshLogs() {
+  state.serviceActionStatus = "正在读取后端日志...";
+  render({ fullView: true });
+  try {
+    const response = await api.getSystemLogs(200);
+    state.logOutput = response.content || "";
+    state.logPath = response.path || "";
+    state.serviceActionStatus = "日志已刷新";
+  } catch (error) {
+    state.serviceActionStatus = error.message || "读取日志失败";
+  }
+  render({ fullView: true });
+}
+
 async function handleInstallCuda() {
   state.cudaActionStatus = "正在安装 CUDA 支持，这可能需要几分钟...";
+  state.cudaInstallOutput = "";
   render({ fullView: true });
   try {
     const response = await api.installCuda({
       cudaVariant: document.getElementById("cuda_variant")?.value || "cu128",
     });
     state.environment = response.environment;
-    state.cudaActionStatus = "CUDA 安装完成，建议重新检测环境";
+    state.cudaInstallOutput = response.stdoutTail || "";
+    if (state.settings) {
+      state.settings = {
+        ...state.settings,
+        cuda_variant: response.cudaVariant,
+        runtime_channel: response.runtimeChannel || state.settings.runtime_channel,
+      };
+    }
+    state.cudaActionStatus = response.restartRequired
+      ? "CUDA 安装完成，请重启应用后切换到新的 GPU 运行时"
+      : "CUDA 安装完成";
   } catch (error) {
     state.cudaActionStatus = error.message || "CUDA 安装失败";
+  }
+  render({ fullView: true });
+}
+
+async function handleShutdownService() {
+  state.serviceActionStatus = "正在关闭后端服务...";
+  render({ fullView: true });
+  try {
+    const response = await api.shutdownService();
+    state.serviceActionStatus = response.message || "服务正在关闭";
+    state.serviceOnline = false;
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  } catch (error) {
+    state.serviceActionStatus = error.message || "关闭服务失败";
   }
   render({ fullView: true });
 }
@@ -523,6 +577,10 @@ function getRenderState() {
     settingsSaveStatus: state.settingsSaveStatus,
     probePreview: state.probePreview,
     cudaActionStatus: state.cudaActionStatus,
+    cudaInstallOutput: state.cudaInstallOutput,
+    logOutput: state.logOutput,
+    logPath: state.logPath,
+    serviceActionStatus: state.serviceActionStatus,
   };
 }
 

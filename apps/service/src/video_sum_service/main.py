@@ -4,6 +4,7 @@ from uvicorn import run as uvicorn_run
 
 from video_sum_infra.logging import configure_logging
 from video_sum_infra.paths import ensure_directory
+from video_sum_infra.runtime import bootstrap_managed_runtime, prepend_runtime_path
 from video_sum_service.app import app, settings_manager
 
 logger = logging.getLogger("video_sum_service.main")
@@ -11,14 +12,17 @@ logger = logging.getLogger("video_sum_service.main")
 
 def run() -> None:
     settings = settings_manager.current
+    bootstrap_managed_runtime(settings.runtime_channel)
+    prepend_runtime_path(settings.runtime_channel)
     configure_logging()
     logger.info(
-        "starting service host=%s port=%s data_dir=%s cache_dir=%s tasks_dir=%s",
+        "starting service host=%s port=%s data_dir=%s cache_dir=%s tasks_dir=%s runtime_channel=%s",
         settings.host,
         settings.port,
         settings.data_dir,
         settings.cache_dir,
         settings.tasks_dir,
+        settings.runtime_channel,
     )
     ensure_directory(settings.data_dir)
     ensure_directory(settings.cache_dir)

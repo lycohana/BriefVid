@@ -4,6 +4,7 @@ from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
 from video_sum_infra.config import ServiceSettings
+from video_sum_infra.runtime import default_data_dir
 
 
 def test_task_input_defaults() -> None:
@@ -40,6 +41,35 @@ def test_service_settings_resolve_cuda_runtime() -> None:
     assert model == "large-v3-turbo"
     assert device == "cuda"
     assert compute_type == "float16"
+
+
+def test_service_settings_default_to_managed_user_data_dir() -> None:
+    settings = ServiceSettings()
+
+    assert settings.data_dir == default_data_dir()
+    assert settings.cache_dir == default_data_dir() / "cache"
+    assert settings.tasks_dir == default_data_dir() / "tasks"
+    assert settings.runtime_channel == "base"
+
+
+def test_transcription_command_falls_back_to_python_module(monkeypatch) -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path("."), runtime_channel="base"))
+
+    monkeypatch.setattr("video_sum_core.pipeline.real.runtime_worker_executable", lambda channel: None)
+    monkeypatch.setattr("video_sum_core.pipeline.real.runtime_python_executable", lambda channel: Path("C:/runtime/python.exe"))
+
+    command = runner._build_transcription_command(
+        audio_path=Path("audio.mp3"),
+        model_name="tiny",
+        device="cpu",
+        compute_type="int8",
+        progress_path=Path("progress.jsonl"),
+        output_path=Path("result.json"),
+    )
+
+    assert Path(command[0]) == Path("C:/runtime/python.exe")
+    assert command[1:3] == ["-m", "video_sum_service.transcribe_worker"]
+    assert "--audio-path" in command
 
 
 def test_real_pipeline_normalizes_empty_llm_summary() -> None:

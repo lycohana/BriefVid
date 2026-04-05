@@ -2,6 +2,13 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from video_sum_infra.runtime import (
+    default_cache_dir,
+    default_data_dir,
+    default_database_url,
+    default_tasks_dir,
+)
+
 DEFAULT_SUMMARY_SYSTEM_PROMPT = (
     "你是一名严谨的中文视频摘要助手。"
     "你的唯一任务是基于用户提供的转写和分段信息，生成可直接展示给前端页面的结构化摘要。"
@@ -54,10 +61,10 @@ LEGACY_SUMMARY_USER_PROMPT_TEMPLATE = (
 class ServiceSettings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 3838
-    data_dir: Path = Field(default_factory=lambda: Path.cwd() / ".data")
-    cache_dir: Path = Field(default_factory=lambda: Path.cwd() / ".data" / "cache")
-    tasks_dir: Path = Field(default_factory=lambda: Path.cwd() / ".data" / "tasks")
-    database_url: str = "sqlite:///./.data/video_sum.db"
+    data_dir: Path = Field(default_factory=default_data_dir)
+    cache_dir: Path = Field(default_factory=default_cache_dir)
+    tasks_dir: Path = Field(default_factory=default_tasks_dir)
+    database_url: str = Field(default_factory=default_database_url)
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
@@ -66,6 +73,7 @@ class ServiceSettings(BaseSettings):
     model_mode: str = "fixed"
     fixed_model: str = "tiny"
     cuda_variant: str = "cu128"
+    runtime_channel: str = "base"
     output_dir: str = ""
     preserve_temp_audio: bool = False
     enable_cache: bool = True

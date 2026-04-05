@@ -1,11 +1,15 @@
 import asyncio
 from contextlib import asynccontextmanager
-import importlib.metadata
 import json
 import logging
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import textwrap
+import threading
+import venv
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -19,6 +23,23 @@ from video_sum_core.utils import normalize_video_url
 from video_sum_infra.app import AppInfo
 from video_sum_infra.config import ServiceSettings
 from video_sum_infra.db import connect_sqlite
+from video_sum_infra.runtime import (
+    bootstrap_managed_runtime,
+    ffmpeg_location,
+    is_frozen,
+    log_dir,
+    managed_runtime_dir,
+    prepend_runtime_path,
+    repo_root,
+    runtime_library_dirs,
+    runtime_python_candidates,
+    runtime_python_executable,
+    runtime_scripts_dir,
+    sanitized_subprocess_dll_search,
+    service_log_path,
+    web_static_dir,
+    write_runtime_metadata,
+)
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import (
     TaskCreateRequest,
@@ -40,47 +61,263 @@ logger = logging.getLogger("video_sum_service.app")
 settings_manager = SettingsManager(ServiceSettings())
 settings = settings_manager.load()
 app_info = AppInfo.load()
-WEB_STATIC_DIR = Path(__file__).resolve().parents[3] / "web" / "static"
+WEB_STATIC_DIR = web_static_dir()
 CACHE_STATIC_DIR = settings.cache_dir
 COVER_CACHE_DIR = CACHE_STATIC_DIR / "covers"
+settings.data_dir.mkdir(parents=True, exist_ok=True)
+settings.cache_dir.mkdir(parents=True, exist_ok=True)
+settings.tasks_dir.mkdir(parents=True, exist_ok=True)
+log_dir().mkdir(parents=True, exist_ok=True)
+_environment_probe_cache: dict[str, dict[str, object]] = {}
+_environment_probe_failures: dict[str, str] = {}
 
 
-def detect_environment() -> dict[str, object]:
+def read_log_tail(max_lines: int = 200) -> str:
+    log_path = service_log_path()
+    if not log_path.exists():
+        return ""
     try:
-        import torch
-    except ImportError:
-        torch = None
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(lines[-max(1, max_lines) :])
 
-    cuda_available = bool(torch is not None and torch.cuda.is_available())
-    gpu_name = torch.cuda.get_device_name(0) if cuda_available else ""
-    torch_version = torch.__version__ if torch is not None else ""
+
+def _runtime_subprocess_env(runtime_channel: str) -> dict[str, str]:
+    env = dict(os.environ)
+    for key in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "__PYVENV_LAUNCHER__",
+    ):
+        env.pop(key, None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
+    path_entries = [str(path) for path in runtime_library_dirs(runtime_channel)]
+    ffmpeg_dir = ffmpeg_location()
+    if ffmpeg_dir is not None:
+        path_entries.append(str(ffmpeg_dir))
+
+    current_path = env.get("PATH", "")
+    inherited_entries: list[str] = []
+    blocked_prefixes: list[Path] = []
+    if is_frozen():
+        blocked_prefixes.append(Path(sys.executable).resolve().parent)
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            blocked_prefixes.append(Path(meipass).resolve())
+
+    for raw_entry in current_path.split(os.pathsep):
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        try:
+            entry_path = Path(entry).resolve()
+        except OSError:
+            inherited_entries.append(entry)
+            continue
+        if any(str(entry_path).lower().startswith(str(prefix).lower()) for prefix in blocked_prefixes):
+            continue
+        inherited_entries.append(entry)
+
+    merged: list[str] = []
+    for entry in [*path_entries, *inherited_entries]:
+        if entry and entry not in merged:
+            merged.append(entry)
+    env["PATH"] = os.pathsep.join(merged)
+    return env
+
+
+def _run_command(command: list[str], runtime_channel: str, timeout: int = 3600) -> subprocess.CompletedProcess[str]:
+    with sanitized_subprocess_dll_search():
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=True,
+            env=_runtime_subprocess_env(runtime_channel),
+            cwd=managed_runtime_dir(runtime_channel),
+        )
+
+
+def _install_workspace_packages(python_executable: Path, runtime_channel: str) -> None:
+    root = repo_root()
+    command = [
+        str(python_executable),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "pip",
+        "setuptools",
+        "wheel",
+        str(root / "packages" / "infra"),
+        str(root / "packages" / "core"),
+        str(root / "apps" / "service"),
+    ]
+    _run_command(command, runtime_channel=runtime_channel, timeout=1800)
+
+
+def _create_source_runtime(runtime_channel: str) -> Path:
+    runtime_dir = managed_runtime_dir(runtime_channel)
+    builder = venv.EnvBuilder(with_pip=True, clear=True)
+    builder.create(runtime_dir)
+    python_executable = None
+    for candidate in runtime_python_candidates(runtime_dir):
+        if candidate.exists():
+            python_executable = candidate
+            break
+    if python_executable is None:
+        raise HTTPException(status_code=500, detail="Managed runtime creation failed: python.exe missing.")
+    _install_workspace_packages(python_executable, runtime_channel=runtime_channel)
+    return runtime_dir
+
+
+def ensure_runtime_channel(runtime_channel: str) -> Path | None:
+    if runtime_channel == "base":
+        bootstrap_managed_runtime("base")
+        python_executable = runtime_python_executable("base")
+        if python_executable is not None:
+            return managed_runtime_dir("base")
+        if not is_frozen():
+            return _create_source_runtime("base")
+        raise HTTPException(status_code=500, detail="Bundled base runtime is missing.")
+
+    target_dir = managed_runtime_dir(runtime_channel)
+    if runtime_python_executable(runtime_channel) is not None:
+        return target_dir
+
+    base_dir = ensure_runtime_channel("base")
+    if base_dir is None or not base_dir.exists():
+        raise HTTPException(status_code=500, detail="Base runtime is unavailable.")
+
+    shutil.copytree(base_dir, target_dir, dirs_exist_ok=True)
+    return target_dir
+
+
+def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
+    active_channel = runtime_channel or settings_manager.current.runtime_channel
+    cached = _environment_probe_cache.get(active_channel)
+    if cached is not None:
+        return dict(cached)
+
+    python_executable = runtime_python_executable(active_channel)
+    if python_executable is None:
+        if active_channel == "base" and not is_frozen():
+            python_executable = Path(sys.executable).resolve()
+        else:
+            payload = {
+                "pythonVersion": "",
+                "torchInstalled": False,
+                "torchVersion": "",
+                "cudaAvailable": False,
+                "gpuName": "",
+                "ytDlpVersion": "",
+                "fasterWhisperVersion": "",
+                "recommendedModel": "base",
+                "recommendedDevice": "cpu",
+                "runtimeChannel": active_channel,
+                "runtimeReady": False,
+                "runtimePython": "",
+            }
+            _environment_probe_cache[active_channel] = dict(payload)
+            return payload
+
+    script = textwrap.dedent(
+        """
+        import importlib.metadata
+        import json
+        import sys
+        try:
+            import torch
+        except ImportError:
+            torch = None
+
+        cuda_available = bool(torch is not None and torch.cuda.is_available())
+        gpu_name = torch.cuda.get_device_name(0) if cuda_available else ""
+        payload = {
+            "pythonVersion": sys.version.split()[0],
+            "torchInstalled": torch is not None,
+            "torchVersion": torch.__version__ if torch is not None else "",
+            "cudaAvailable": cuda_available,
+            "gpuName": gpu_name,
+            "ytDlpVersion": importlib.metadata.version("yt-dlp"),
+            "fasterWhisperVersion": importlib.metadata.version("faster-whisper"),
+            "recommendedModel": "large-v3-turbo" if cuda_available else "base",
+            "recommendedDevice": "cuda" if cuda_available else "cpu",
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        """
+    ).strip()
 
     try:
-        yt_dlp_version = importlib.metadata.version("yt-dlp")
-    except importlib.metadata.PackageNotFoundError:
-        yt_dlp_version = ""
+        result = _run_command([str(python_executable), "-c", script], runtime_channel=active_channel, timeout=120)
+        payload = json.loads(result.stdout.strip() or "{}")
+        _environment_probe_failures.pop(active_channel, None)
+    except Exception as exc:
+        failure_detail = ""
+        if isinstance(exc, subprocess.CalledProcessError):
+            failure_detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        else:
+            failure_detail = str(exc)
+        if _environment_probe_failures.get(active_channel) != failure_detail:
+            logger.warning(
+                "detect environment failed runtime_channel=%s error=%s detail=%s",
+                active_channel,
+                exc,
+                failure_detail[-1200:],
+            )
+            _environment_probe_failures[active_channel] = failure_detail
+        payload = {
+            "pythonVersion": "",
+            "torchInstalled": False,
+            "torchVersion": "",
+            "cudaAvailable": False,
+            "gpuName": "",
+            "ytDlpVersion": "",
+            "fasterWhisperVersion": "",
+            "recommendedModel": "base",
+            "recommendedDevice": "cpu",
+            "runtimeError": failure_detail[-1200:],
+        }
 
-    try:
-        faster_whisper_version = importlib.metadata.version("faster-whisper")
-    except importlib.metadata.PackageNotFoundError:
-        faster_whisper_version = ""
+    payload.update(
+        {
+            "runtimeChannel": active_channel,
+            "runtimeReady": runtime_python_executable(active_channel) is not None,
+            "runtimePython": str(python_executable),
+        }
+    )
+    if not payload.get("runtimeError"):
+        payload["runtimeError"] = ""
+    _environment_probe_cache[active_channel] = dict(payload)
+    return payload
 
-    return {
-        "pythonVersion": sys.version.split()[0],
-        "torchInstalled": torch is not None,
-        "torchVersion": torch_version,
-        "cudaAvailable": cuda_available,
-        "gpuName": gpu_name,
-        "ytDlpVersion": yt_dlp_version,
-        "fasterWhisperVersion": faster_whisper_version,
-        "recommendedModel": "large-v3-turbo" if cuda_available else "base",
-        "recommendedDevice": "cuda" if cuda_available else "cpu",
-    }
+
+def clear_environment_probe_cache(runtime_channel: str | None = None) -> None:
+    if runtime_channel is None:
+        _environment_probe_cache.clear()
+        _environment_probe_failures.clear()
+        return
+    _environment_probe_cache.pop(runtime_channel, None)
+    _environment_probe_failures.pop(runtime_channel, None)
 
 
 def build_worker(repository: SqliteTaskRepository, current_settings: ServiceSettings) -> TaskWorker:
+    selected_runtime_channel = current_settings.runtime_channel
+    if selected_runtime_channel != "base" and runtime_python_executable(selected_runtime_channel) is None:
+        logger.warning("runtime channel %s is not ready, falling back to base", selected_runtime_channel)
+        selected_runtime_channel = "base"
+
+    bootstrap_managed_runtime(selected_runtime_channel)
+    prepend_runtime_path(selected_runtime_channel)
     runtime_settings = current_settings.with_resolved_runtime(
-        cuda_available=bool(detect_environment().get("cudaAvailable"))
+        cuda_available=bool(detect_environment(selected_runtime_channel).get("cudaAvailable"))
     )
     logger.info(
         "build worker whisper_model=%s whisper_device=%s whisper_compute_type=%s llm_enabled=%s llm_model=%s",
@@ -92,6 +329,7 @@ def build_worker(repository: SqliteTaskRepository, current_settings: ServiceSett
     )
     pipeline_settings = PipelineSettings(
         tasks_dir=runtime_settings.tasks_dir,
+        runtime_channel=selected_runtime_channel,
         whisper_model=runtime_settings.whisper_model,
         whisper_device=runtime_settings.whisper_device,
         whisper_compute_type=runtime_settings.whisper_compute_type,
@@ -107,6 +345,46 @@ def build_worker(repository: SqliteTaskRepository, current_settings: ServiceSett
         summary_chunk_retry_count=runtime_settings.summary_chunk_retry_count,
     )
     return TaskWorker(repository=repository, pipeline_runner=RealPipelineRunner(pipeline_settings))
+
+
+def serialize_settings(current_settings: ServiceSettings) -> dict[str, object]:
+    runtime_settings = current_settings.with_resolved_runtime(
+        cuda_available=bool(detect_environment(current_settings.runtime_channel).get("cudaAvailable"))
+    )
+    return {
+        "host": current_settings.host,
+        "port": current_settings.port,
+        "data_dir": str(current_settings.data_dir),
+        "cache_dir": str(current_settings.cache_dir),
+        "tasks_dir": str(current_settings.tasks_dir),
+        "database_url": current_settings.database_url,
+        "whisper_model": runtime_settings.whisper_model,
+        "whisper_device": runtime_settings.whisper_device,
+        "whisper_compute_type": runtime_settings.whisper_compute_type,
+        "device_preference": current_settings.device_preference,
+        "compute_type": current_settings.compute_type,
+        "model_mode": current_settings.model_mode,
+        "fixed_model": current_settings.fixed_model,
+        "cuda_variant": current_settings.cuda_variant,
+        "runtime_channel": current_settings.runtime_channel,
+        "output_dir": current_settings.output_dir,
+        "preserve_temp_audio": current_settings.preserve_temp_audio,
+        "enable_cache": current_settings.enable_cache,
+        "language": current_settings.language,
+        "summary_mode": current_settings.summary_mode,
+        "llm_enabled": current_settings.llm_enabled,
+        "llm_provider": current_settings.llm_provider,
+        "llm_base_url": current_settings.llm_base_url,
+        "llm_model": current_settings.llm_model,
+        "llm_api_key": current_settings.llm_api_key,
+        "llm_api_key_configured": bool(current_settings.llm_api_key),
+        "summary_system_prompt": current_settings.summary_system_prompt,
+        "summary_user_prompt_template": current_settings.summary_user_prompt_template,
+        "summary_chunk_target_chars": current_settings.summary_chunk_target_chars,
+        "summary_chunk_overlap_segments": current_settings.summary_chunk_overlap_segments,
+        "summary_chunk_concurrency": current_settings.summary_chunk_concurrency,
+        "summary_chunk_retry_count": current_settings.summary_chunk_retry_count,
+    }
 
 
 def cache_cover_image(source_url: str, canonical_id: str, referer_url: str | None = None) -> str:
@@ -171,8 +449,14 @@ def install_cuda_support(cuda_variant: str) -> dict[str, object]:
     if cuda_variant not in allowed_variants:
         raise HTTPException(status_code=400, detail="Unsupported CUDA variant.")
 
+    runtime_channel = f"gpu-{cuda_variant}"
+    runtime_dir = ensure_runtime_channel(runtime_channel)
+    python_executable = runtime_python_executable(runtime_channel)
+    if runtime_dir is None or python_executable is None:
+        raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
+
     command = [
-        sys.executable,
+        str(python_executable),
         "-m",
         "pip",
         "install",
@@ -184,20 +468,42 @@ def install_cuda_support(cuda_variant: str) -> dict[str, object]:
         f"https://download.pytorch.org/whl/{cuda_variant}",
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=3600, check=True)
+        result = _run_command(command, runtime_channel=runtime_channel)
     except subprocess.CalledProcessError as exc:
-        raise HTTPException(status_code=500, detail=(exc.stderr or exc.stdout or str(exc))[:1200]) from exc
+        clear_environment_probe_cache(runtime_channel)
+        raise HTTPException(status_code=500, detail=((exc.stderr or exc.stdout or str(exc))[-1500:])) from exc
+
+    current_settings = settings_manager.save(
+        SettingsUpdatePayload(cuda_variant=cuda_variant, runtime_channel=runtime_channel)
+    )
+    clear_environment_probe_cache(runtime_channel)
+    clear_environment_probe_cache("base")
+    write_runtime_metadata(
+        runtime_channel,
+        {
+            "runtimeChannel": runtime_channel,
+            "cudaVariant": cuda_variant,
+            "python": str(python_executable),
+        },
+    )
+    environment = detect_environment(runtime_channel)
+    app.state.task_worker = build_worker(app.state.task_repository, current_settings)
 
     return {
+        "installed": True,
         "cudaVariant": cuda_variant,
-        "stdout": (result.stdout or "")[-1500:],
-        "environment": detect_environment(),
+        "runtimeChannel": runtime_channel,
+        "restartRequired": True,
+        "stdoutTail": (result.stdout or "")[-1500:],
+        "environment": environment,
     }
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     current_settings = settings_manager.current
+    bootstrap_managed_runtime(current_settings.runtime_channel)
+    prepend_runtime_path(current_settings.runtime_channel)
     connection = connect_sqlite(current_settings.database_url)
     repository = SqliteTaskRepository(connection)
     repository.initialize()
@@ -234,6 +540,12 @@ def video_detail_page(video_id: str) -> FileResponse:
     return FileResponse(WEB_STATIC_DIR / "index.html")
 
 
+@app.get("/settings", include_in_schema=False)
+@app.get("/settings/{subpath:path}", include_in_schema=False)
+def settings_page(subpath: str = "") -> FileResponse:
+    return FileResponse(WEB_STATIC_DIR / "index.html")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": app_info.name, "version": app_info.version}
@@ -242,8 +554,9 @@ def health() -> dict[str, str]:
 @app.get("/api/v1/system/info")
 def system_info() -> dict[str, object]:
     current_settings = settings_manager.current
+    environment = detect_environment(current_settings.runtime_channel)
     runtime_settings = current_settings.with_resolved_runtime(
-        cuda_available=bool(detect_environment().get("cudaAvailable"))
+        cuda_available=bool(environment.get("cudaAvailable"))
     )
     return {
         "application": {"name": app_info.name, "version": app_info.version},
@@ -254,8 +567,11 @@ def system_info() -> dict[str, object]:
             "cache_dir": str(current_settings.cache_dir),
             "tasks_dir": str(current_settings.tasks_dir),
             "database_url": current_settings.database_url,
+            "log_dir": str(log_dir()),
+            "log_file": str(service_log_path()),
         },
         "runtime": {
+            "runtime_channel": current_settings.runtime_channel,
             "whisper_model": runtime_settings.whisper_model,
             "whisper_device": runtime_settings.whisper_device,
             "whisper_compute_type": runtime_settings.whisper_compute_type,
@@ -263,103 +579,57 @@ def system_info() -> dict[str, object]:
             "llm_model": current_settings.llm_model,
         },
         "taskModel": {"statuses": [status.value for status in TaskStatus]},
-        "environment": detect_environment(),
+        "environment": environment,
     }
 
 
 @app.get("/api/v1/settings")
 def get_settings() -> dict[str, object]:
     current_settings = settings_manager.current
-    runtime_settings = current_settings.with_resolved_runtime(
-        cuda_available=bool(detect_environment().get("cudaAvailable"))
-    )
-    return {
-        "host": current_settings.host,
-        "port": current_settings.port,
-        "data_dir": str(current_settings.data_dir),
-        "cache_dir": str(current_settings.cache_dir),
-        "tasks_dir": str(current_settings.tasks_dir),
-        "database_url": current_settings.database_url,
-        "whisper_model": runtime_settings.whisper_model,
-        "whisper_device": runtime_settings.whisper_device,
-        "whisper_compute_type": runtime_settings.whisper_compute_type,
-        "device_preference": current_settings.device_preference,
-        "compute_type": current_settings.compute_type,
-        "model_mode": current_settings.model_mode,
-        "fixed_model": current_settings.fixed_model,
-        "cuda_variant": current_settings.cuda_variant,
-        "output_dir": current_settings.output_dir,
-        "preserve_temp_audio": current_settings.preserve_temp_audio,
-        "enable_cache": current_settings.enable_cache,
-        "language": current_settings.language,
-        "summary_mode": current_settings.summary_mode,
-        "llm_enabled": current_settings.llm_enabled,
-        "llm_provider": current_settings.llm_provider,
-        "llm_base_url": current_settings.llm_base_url,
-        "llm_model": current_settings.llm_model,
-        "llm_api_key": current_settings.llm_api_key,
-        "llm_api_key_configured": bool(current_settings.llm_api_key),
-        "summary_system_prompt": current_settings.summary_system_prompt,
-        "summary_user_prompt_template": current_settings.summary_user_prompt_template,
-        "summary_chunk_target_chars": current_settings.summary_chunk_target_chars,
-        "summary_chunk_overlap_segments": current_settings.summary_chunk_overlap_segments,
-        "summary_chunk_concurrency": current_settings.summary_chunk_concurrency,
-        "summary_chunk_retry_count": current_settings.summary_chunk_retry_count,
-    }
+    return serialize_settings(current_settings)
 
 
 @app.put("/api/v1/settings")
 def update_settings(payload: SettingsUpdatePayload) -> dict[str, object]:
     current_settings = settings_manager.save(payload)
-    runtime_settings = current_settings.with_resolved_runtime(
-        cuda_available=bool(detect_environment().get("cudaAvailable"))
-    )
+    clear_environment_probe_cache()
+    bootstrap_managed_runtime(current_settings.runtime_channel)
+    prepend_runtime_path(current_settings.runtime_channel)
     current_settings.data_dir.mkdir(parents=True, exist_ok=True)
     current_settings.cache_dir.mkdir(parents=True, exist_ok=True)
     current_settings.tasks_dir.mkdir(parents=True, exist_ok=True)
     app.state.task_worker = build_worker(app.state.task_repository, current_settings)
     return {
         "saved": True,
-        "settings": {
-            "host": current_settings.host,
-            "port": current_settings.port,
-            "data_dir": str(current_settings.data_dir),
-            "cache_dir": str(current_settings.cache_dir),
-            "tasks_dir": str(current_settings.tasks_dir),
-            "database_url": current_settings.database_url,
-            "whisper_model": runtime_settings.whisper_model,
-            "whisper_device": runtime_settings.whisper_device,
-            "whisper_compute_type": runtime_settings.whisper_compute_type,
-            "device_preference": current_settings.device_preference,
-            "compute_type": current_settings.compute_type,
-            "model_mode": current_settings.model_mode,
-            "fixed_model": current_settings.fixed_model,
-            "cuda_variant": current_settings.cuda_variant,
-            "output_dir": current_settings.output_dir,
-            "preserve_temp_audio": current_settings.preserve_temp_audio,
-            "enable_cache": current_settings.enable_cache,
-            "language": current_settings.language,
-            "summary_mode": current_settings.summary_mode,
-            "llm_enabled": current_settings.llm_enabled,
-            "llm_provider": current_settings.llm_provider,
-            "llm_base_url": current_settings.llm_base_url,
-            "llm_model": current_settings.llm_model,
-            "llm_api_key": current_settings.llm_api_key,
-            "llm_api_key_configured": bool(current_settings.llm_api_key),
-            "summary_system_prompt": current_settings.summary_system_prompt,
-            "summary_user_prompt_template": current_settings.summary_user_prompt_template,
-            "summary_chunk_target_chars": current_settings.summary_chunk_target_chars,
-            "summary_chunk_overlap_segments": current_settings.summary_chunk_overlap_segments,
-            "summary_chunk_concurrency": current_settings.summary_chunk_concurrency,
-            "summary_chunk_retry_count": current_settings.summary_chunk_retry_count,
-        },
+        "settings": serialize_settings(current_settings),
         "message": "设置已保存。涉及服务监听地址的修改将在下次启动后生效。",
     }
 
 
 @app.get("/api/v1/environment")
 def get_environment() -> dict[str, object]:
-    return detect_environment()
+    return detect_environment(settings_manager.current.runtime_channel)
+
+
+@app.get("/api/v1/system/logs")
+def get_system_logs(lines: int = 200) -> dict[str, object]:
+    line_count = max(20, min(int(lines), 1000))
+    return {
+        "path": str(service_log_path()),
+        "lines": line_count,
+        "content": read_log_tail(line_count),
+    }
+
+
+@app.post("/api/v1/system/shutdown")
+def shutdown_service() -> dict[str, object]:
+    logger.warning("shutdown requested from api")
+
+    def _shutdown() -> None:
+        os._exit(0)
+
+    threading.Timer(0.5, _shutdown).start()
+    return {"shuttingDown": True, "message": "服务正在关闭。"}
 
 
 @app.post("/api/v1/cuda/install")

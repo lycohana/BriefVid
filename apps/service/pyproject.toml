@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 video-sum-service = "video_sum_service.main:run"
+video-sum-transcribe-worker = "video_sum_service.transcribe_worker:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/video_sum_service"]

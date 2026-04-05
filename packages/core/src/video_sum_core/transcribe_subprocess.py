@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
-
-from faster_whisper import WhisperModel
 
 
 logger = logging.getLogger("video_sum_core.transcribe_subprocess")
@@ -25,6 +24,30 @@ def write_progress(progress_path: Path, payload: dict[str, object]) -> None:
         handle.flush()
 
 
+def configure_runtime_library_dirs() -> None:
+    raw_paths = os.environ.get("VIDEO_SUM_DLL_PATHS", "")
+    if not raw_paths:
+        return
+    dll_paths: list[str] = []
+    for entry in raw_paths.split(os.pathsep):
+        path = entry.strip()
+        if path and path not in dll_paths and Path(path).exists():
+            dll_paths.append(path)
+
+    if not dll_paths:
+        return
+
+    os.environ["PATH"] = os.pathsep.join([*dll_paths, os.environ.get("PATH", "")])
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if add_dll_directory is None:
+        return
+    for path in dll_paths:
+        try:
+            add_dll_directory(path)
+        except OSError:
+            logger.debug("skip dll directory path=%s", path, exc_info=True)
+
+
 def transcribe(
     audio_path: Path,
     model_name: str,
@@ -34,6 +57,9 @@ def transcribe(
     output_path: Path,
     duration: float | None,
 ) -> None:
+    configure_runtime_library_dirs()
+    from faster_whisper import WhisperModel
+
     logger.info(
         "child transcription start audio=%s model=%s device=%s compute_type=%s",
         audio_path,

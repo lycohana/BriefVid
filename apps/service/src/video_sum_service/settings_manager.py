@@ -29,6 +29,7 @@ class SettingsUpdatePayload(BaseModel):
     model_mode: str | None = None
     fixed_model: str | None = None
     cuda_variant: str | None = None
+    runtime_channel: str | None = None
     output_dir: str | None = None
     preserve_temp_audio: bool | None = None
     enable_cache: bool | None = None

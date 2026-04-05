@@ -1,61 +1,96 @@
-# 本地视频总结服务
+# Video Summarizer
 
-一个本地优先的 B 站视频总结项目。
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-当前仓库已经不是单纯的“重构骨架”，而是一个可以本地跑通的开发版：后端服务、SQLite 持久化、任务执行链路和基础 Web UI 都已经接上了。
+**本地优先的视频总结工具** —— 输入视频链接，自动获取结构化摘要、转写文本和任务记录。
 
-## 当前能力
+![Features](https://img.shields.io/badge/features-B 站支持 | 转写 | 摘要 | WebUI-green)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
-- 输入 B 站视频链接并探测视频信息
-- 自动缓存封面、维护本地视频列表
-- 提交总结任务并在后台线程执行
-- 使用 `yt-dlp` 下载音频
-- 使用 `faster-whisper` 执行转写
-- 可选调用 OpenAI-compatible LLM 生成结构化摘要
-- 将任务、事件、结果保存到 SQLite
-- 导出 `transcript.txt` 和 `summary.json`
-- 提供本地 Web UI、REST API 和 SSE 进度流
+---
 
-## 项目结构
+## 📖 目录
 
-```text
-apps/
-  service/          FastAPI 后端服务
-  web/              本地 Web UI 静态资源
-packages/
-  core/             下载、转写、摘要等核心能力
-  infra/            配置、路径、日志等基础设施
-scripts/
-  run_service.ps1   本地启动服务
-  submit_task.ps1   命令行提交任务
-tests/
-  unit/             基础单元测试
-docs/
-  architecture/     架构说明与启动笔记
-```
+- [简介](#简介)
+- [功能特性](#功能特性)
+- [技术栈](#技术栈)
+- [快速开始](#快速开始)
+  - [环境要求](#环境要求)
+  - [安装依赖](#安装依赖)
+  - [配置环境变量](#配置环境变量)
+  - [启动服务](#启动服务)
+- [API 概览](#api 概览)
+- [命令行工具](#命令行工具)
+- [Windows 打包分发](#windows 打包分发)
+- [GPU/CUDA 支持](#gpucuda 支持)
+- [数据存储](#数据存储)
+- [项目结构](#项目结构)
+- [开发指南](#开发指南)
+- [限制与已知问题](#限制与已知问题)
+- [路线图](#路线图)
+- [贡献](#贡献)
+- [许可证](#许可证)
 
-## 运行要求
+---
 
-- Python `3.12`
-- 建议提前安装 `ffmpeg` 并确保已加入 `PATH`
-- 首次转写时会按需下载 Whisper 模型
-- 如果要启用 LLM 摘要，需要可用的 OpenAI-compatible 接口
+## 简介
+
+Video Summarizer 是一个本地优先的视频总结工具，面向 B 站视频链接，提供下载、转写、结构化摘要、任务记录和本地 Web UI。
+
+这个仓库已经可以作为一个可运行的开源项目使用，而不只是原型代码。
+
+---
+
+## 功能特性
+
+- 🎯 **视频链接解析** - 输入 B 站视频链接并自动探测视频信息
+- 🖼️ **封面缓存** - 自动缓存封面并维护本地视频库
+- ⚙️ **后台任务处理** - 后台执行下载、转写、摘要任务
+- 📡 **实时进度流** - 支持 REST API 和 SSE 任务进度流
+- 📄 **结果导出** - 结果落盘为 `transcript.txt` 和 `summary.json`
+- 🔧 **设置管理** - 设置页支持查看后端日志、关闭服务、安装 CUDA 支持
+- 📦 **独立分发** - Windows 分发包不依赖用户本机 Python
+
+---
+
+## 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| **Backend** | FastAPI |
+| **Frontend** | Vanilla JavaScript + Static Assets |
+| **Persistence** | SQLite |
+| **Download** | `yt-dlp` |
+| **Transcription** | `faster-whisper` |
+| **LLM** | OpenAI-compatible API |
+| **Packaging** | PyInstaller onedir |
+
+---
 
 ## 快速开始
 
-### 1. 安装本地包
+### 环境要求
+
+- Python `3.12`
+- Windows 开发和打包环境最佳
+- 开发态建议本机可用 `ffmpeg`
+- 如果开启 LLM 摘要，需要可用的 OpenAI-compatible 接口
+
+### 安装依赖
 
 ```powershell
 python -m pip install -e .\packages\infra -e .\packages\core -e .\apps\service
 ```
 
-### 2. 准备环境变量
+### 配置环境变量
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-默认 `.env.example` 已包含一组示例配置：
+默认示例配置如下：
 
 ```env
 VIDEO_SUM_HOST=127.0.0.1
@@ -69,9 +104,9 @@ VIDEO_SUM_LLM_MODEL=qwen3.5-plus
 VIDEO_SUM_LLM_API_KEY=replace-with-your-api-key
 ```
 
-如果你暂时不想接 LLM，可以把 `VIDEO_SUM_LLM_ENABLED=false`，服务会退回本地规则摘要。
+> 💡 **提示**: 如果暂时不想接 LLM，把 `VIDEO_SUM_LLM_ENABLED=false` 即可，服务会退回本地规则摘要。
 
-### 3. 启动服务
+### 启动服务
 
 ```powershell
 python -m video_sum_service
@@ -83,67 +118,66 @@ python -m video_sum_service
 .\scripts\run_service.ps1
 ```
 
-### 4. 打开页面
+### 访问应用
 
-- `http://127.0.0.1:3838/`
-- `http://127.0.0.1:3838/health`
-- `http://127.0.0.1:3838/api/v1/system/info`
+| 页面 | URL |
+|------|-----|
+| **首页** | `http://127.0.0.1:3838/` |
+| **设置** | `http://127.0.0.1:3838/settings` |
+| **健康检查** | `http://127.0.0.1:3838/health` |
+| **系统信息** | `http://127.0.0.1:3838/api/v1/system/info` |
 
-首页是当前本地 Web UI，后端 API 统一挂在 `/api/v1/*`。
+---
 
-## 常用接口
+## API 概览
 
-### 系统与设置
+### 系统接口
 
-- `GET /health`
-- `GET /api/v1/system/info`
-- `GET /api/v1/environment`
-- `GET /api/v1/settings`
-- `PUT /api/v1/settings`
-- `POST /api/v1/cuda/install`
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `GET` | `/api/v1/system/info` | 系统信息 |
+| `GET` | `/api/v1/system/logs` | 系统日志 |
+| `POST` | `/api/v1/system/shutdown` | 关闭服务 |
+| `GET` | `/api/v1/environment` | 环境信息 |
 
-### 视频
+### 设置接口
 
-- `POST /api/v1/videos/probe`
-- `GET /api/v1/videos`
-- `GET /api/v1/videos/{video_id}`
-- `DELETE /api/v1/videos/{video_id}`
-- `GET /api/v1/videos/{video_id}/tasks`
-- `POST /api/v1/videos/{video_id}/tasks`
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `GET` | `/api/v1/settings` | 获取设置 |
+| `PUT` | `/api/v1/settings` | 更新设置 |
+| `POST` | `/api/v1/cuda/install` | 安装 CUDA 支持 |
 
-`POST /api/v1/videos/probe` 请求体示例：
+### 视频接口
 
-```json
-{
-  "url": "https://www.bilibili.com/video/BV1R6NFzXE1H/",
-  "force_refresh": false
-}
-```
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `POST` | `/api/v1/videos/probe` | 探测视频信息 |
+| `GET` | `/api/v1/videos` | 获取视频列表 |
+| `GET` | `/api/v1/videos/{video_id}` | 获取视频详情 |
+| `DELETE` | `/api/v1/videos/{video_id}` | 删除视频 |
+| `GET` | `/api/v1/videos/{video_id}/tasks` | 获取视频任务列表 |
+| `POST` | `/api/v1/videos/{video_id}/tasks` | 创建视频任务 |
 
-### 任务
+### 任务接口
 
-- `POST /api/v1/tasks`
-- `GET /api/v1/tasks`
-- `GET /api/v1/tasks/{task_id}`
-- `GET /api/v1/tasks/{task_id}/result`
-- `GET /api/v1/tasks/{task_id}/progress`
-- `GET /api/v1/tasks/{task_id}/events`
-- `GET /api/v1/tasks/{task_id}/events/stream`
-- `DELETE /api/v1/tasks/{task_id}`
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `POST` | `/api/v1/tasks` | 创建任务 |
+| `GET` | `/api/v1/tasks` | 获取任务列表 |
+| `GET` | `/api/v1/tasks/{task_id}` | 获取任务详情 |
+| `GET` | `/api/v1/tasks/{task_id}/result` | 获取任务结果 |
+| `GET` | `/api/v1/tasks/{task_id}/progress` | 获取任务进度 |
+| `GET` | `/api/v1/tasks/{task_id}/events` | 获取任务事件 |
+| `GET` | `/api/v1/tasks/{task_id}/events/stream` | SSE 事件流 |
+| `DELETE` | `/api/v1/tasks/{task_id}` | 删除任务 |
 
-`POST /api/v1/tasks` 请求体示例：
+---
 
-```json
-{
-  "input_type": "url",
-  "source": "https://www.bilibili.com/video/BV1R6NFzXE1H/",
-  "title": "示例视频"
-}
-```
+## 命令行工具
 
-## 命令行示例
-
-直接提交一个任务：
+使用 PowerShell 脚本提交任务：
 
 ```powershell
 .\scripts\submit_task.ps1 -Url "https://www.bilibili.com/video/BV1R6NFzXE1H/"
@@ -157,35 +191,161 @@ python -m video_sum_service
   -Title "我被手表的睡眠评分，骗焦虑了好几年？【差评君】"
 ```
 
-脚本会轮询 `/api/v1/tasks/{task_id}/result`，直到任务进入终态。
+---
 
-## 结果落盘
+## Windows 打包分发
 
-默认数据目录在仓库根目录下的 `.data/`：
+Windows 分发主路线已经切到 `PyInstaller onedir`。
 
-- `.data/video_sum.db`：SQLite 数据库
-- `.data/cache/`：缓存资源和封面
-- `.data/tasks/<task_id>/transcript.txt`：转写文本
-- `.data/tasks/<task_id>/summary.json`：结构化摘要结果
+### 构建要求
 
-## 测试
+- 构建 Python 固定为 `3.12`
+- 建议当前机器可用真实的 `ffmpeg.exe` 和 `ffprobe.exe`
+- 如 `ffmpeg` 不在 `PATH`，可设置 `VIDEO_SUM_FFMPEG_DIR`
+
+### 构建命令
+
+```powershell
+python .\packaging\pyinstaller\build_onedir.py
+```
+
+产物位于：
+
+- `dist/video-summarizer/video-summarizer.exe`
+- `dist/video-summarizer/_internal/...`
+
+更详细的打包说明见 [`packaging/pyinstaller/README.md`](packaging/pyinstaller/README.md)。
+
+---
+
+## GPU/CUDA 支持
+
+这个项目没有把完整 CUDA 依赖直接塞进基础包，而是采用"基础运行时 + 受控 GPU 运行时"的方式：
+
+- ✅ 基础包默认保证 CPU 可用
+- ✅ 设置页可一键安装 CUDA 支持
+- ✅ CUDA 依赖安装到 `%LOCALAPPDATA%/video-summarizer/runtime/`
+- ✅ 安装完成后需要重启应用
+- ✅ 环境检测、日志和运行时切换都在设置页可见
+
+这套方案的目标是让 `onedir` 分发更稳定，同时保留 GPU 能力。
+
+---
+
+## 数据存储
+
+### 数据目录
+
+默认数据目录位于 `%LOCALAPPDATA%/video-summarizer/data/`：
+
+| 文件/目录 | 描述 |
+|-----------|------|
+| `video_sum.db` | SQLite 数据库 |
+| `cache/` | 封面和缓存资源 |
+| `tasks/<task_id>/transcript.txt` | 转写文本 |
+| `tasks/<task_id>/summary.json` | 结构化摘要结果 |
+
+### 日志目录
+
+日志目录位于 `%LOCALAPPDATA%/video-summarizer/logs/`。
+
+---
+
+## 项目结构
+
+```
+bilibili_sum/
+├── apps/
+│   ├── service/          # FastAPI 后端服务
+│   └── web/              # 本地 Web UI 静态资源
+├── packages/
+│   ├── core/             # 下载、转写、摘要等核心能力
+│   └── infra/            # 配置、路径、日志等基础设施
+├── scripts/
+│   ├── run_service.ps1   # 本地启动服务
+│   └── submit_task.ps1   # 命令行提交任务
+├── tests/
+│   └── unit/             # 单元测试
+├── docs/
+│   └── architecture/     # 架构说明与启动笔记
+├── packaging/
+│   └── pyinstaller/      # Windows onedir 打包脚本和说明
+├── .env.example          # 环境变量示例
+├── .gitignore
+├── pyproject.toml        # 项目配置
+└── README.md
+```
+
+---
+
+## 开发指南
+
+### 运行测试
 
 ```powershell
 python -m pytest
 ```
 
-## 当前限制
+### 架构文档
 
-- 当前真实执行链路只支持 B 站视频 URL
-- 后台执行仍是轻量线程 worker，不是正式任务队列
-- 还没有取消、重试、并发调度和缓存复用策略
-- `ffmpeg` 依赖目前默认要求本机自行准备
-- 首次模型下载和首次转写可能会比较慢
-- Web UI 目前是开发态界面，不是最终桌面端交付形态
+本仓库当前使用 workspace 结构：
 
-## 相关文档
+- `apps/service`
+- `packages/core`
+- `packages/infra`
 
-- [`REFACTOR_ARCHITECTURE.md`](./REFACTOR_ARCHITECTURE.md)
-- [`REFACTOR_TASK_BREAKDOWN.md`](./REFACTOR_TASK_BREAKDOWN.md)
-- [`docs/architecture/bootstrap.md`](./docs/architecture/bootstrap.md)
-- [`PACKAGING_INSTALL_PLAN.md`](./PACKAGING_INSTALL_PLAN.md)
+如果你准备继续开发，建议优先阅读：
+
+- [`REFACTOR_ARCHITECTURE.md`](REFACTOR_ARCHITECTURE.md)
+- [`REFACTOR_TASK_BREAKDOWN.md`](REFACTOR_TASK_BREAKDOWN.md)
+- [`docs/architecture/bootstrap.md`](docs/architecture/bootstrap.md)
+- [`PACKAGING_INSTALL_PLAN.md`](PACKAGING_INSTALL_PLAN.md)
+
+---
+
+## 限制与已知问题
+
+- ⚠️ 当前真实执行链路主要支持 B 站视频 URL
+- ⚠️ 任务执行仍是轻量线程 worker，不是正式队列系统
+- ⚠️ 暂未实现成熟的取消、重试和并发调度策略
+- ⚠️ 首次模型下载和首次 GPU 运行会比较慢
+- ⚠️ 当前 Web UI 以可用性为主，不是最终桌面端交互形态
+
+---
+
+## 路线图
+
+- [ ] 更完整的视频平台支持（YouTube、抖音等）
+- [ ] 更稳定的任务调度与恢复机制
+- [ ] 更成熟的桌面端封装（Electron/Tauri）
+- [ ] 更清晰的模型、缓存和运行时管理
+- [ ] 支持更多 LLM 提供商
+- [ ] 添加任务队列系统（Celery/RQ）
+
+---
+
+## 贡献
+
+欢迎贡献代码、报告问题或提出建议！
+
+1. Fork 本仓库
+2. 创建你的特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交你的更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启一个 Pull Request
+
+---
+
+## 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+
+---
+
+<div align="center">
+
+**Video Summarizer** - 让视频总结更高效
+
+Made with ❤️ by the community
+
+</div>
