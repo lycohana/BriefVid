@@ -416,9 +416,9 @@ python -m pytest -q
   - `fix:` / `perf:` / `refactor:` -> `patch`
   - `feat!:`、`fix!:`、`perf!:`、`refactor!:` 或提交正文包含 `BREAKING CHANGE` -> `major`
   - `docs:`、`chore:`、`ci:` 等默认不发版
-- 每次检测到版本更新时，都会在同一个 workflow 里构建 Windows 安装包并创建 GitHub Release
+- 每次检测到版本更新时，都会在同一个 workflow 里构建 Windows 安装程序并创建 GitHub Release
 - 自动发版前会先在 GitHub Actions 的 Windows runner 上真实执行一次 `npm run package:win`
-- 只有 Windows 打包预检通过，才会提交版本号、创建 tag，并把构建好的安装包上传到该版本的 GitHub Release
+- 只有 Windows 打包预检通过，才会提交版本号、创建 tag，并把构建好的 `Setup.exe` 安装包上传到该版本的 GitHub Release
 
 ---
 

@@ -97,22 +97,12 @@ jobs:
           CSC_PLATFORM: "windows"
         run: npm run package:win
 
-      - name: Archive unpacked app
-        shell: pwsh
-        run: |
-          $archive = "dist/desktop/BriefVid-${{ needs.detect-release.outputs.next_version }}-win-x64-unpacked.zip"
-          if (Test-Path $archive) {
-            Remove-Item -LiteralPath $archive -Force
-          }
-          Compress-Archive -Path "dist/desktop/win-unpacked/*" -DestinationPath $archive
-
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: |
             dist/desktop/BriefVid-*-Setup.exe
-            dist/desktop/BriefVid-*-win-x64-unpacked.zip
           if-no-files-found: error
 
   create-release-tag:
@@ -197,4 +187,3 @@ jobs:
           generate_release_notes: true
           files: |
             dist/desktop/BriefVid-*-Setup.exe
-            dist/desktop/BriefVid-*-win-x64-unpacked.zip
