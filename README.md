@@ -6,7 +6,7 @@
 
 **本地优先的视频总结工具** —— 输入视频链接，自动获取结构化摘要、转写文本和任务记录。
 
-![Features](https://img.shields.io/badge/features-B 站支持 | 转写 | 摘要 | WebUI-green)
+![Features](https://img.shields.io/badge/features-B站支持|转写|摘要|WebUI-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ---
@@ -105,6 +105,12 @@ VIDEO_SUM_LLM_API_KEY=replace-with-your-api-key
 ```
 
 > 💡 **提示**: 如果暂时不想接 LLM，把 `VIDEO_SUM_LLM_ENABLED=false` 即可，服务会退回本地规则摘要。
+
+如果你使用 DashScope 兼容接口，常见排障点如下：
+
+- `VIDEO_SUM_LLM_BASE_URL` 保持为 `https://coding.dashscope.aliyuncs.com/v1`
+- `VIDEO_SUM_LLM_API_KEY` 需要填写有效的 DashScope AccessKey，而不是其他平台的 Key
+- 如果日志出现 `401 invalid_api_key` 或 `token expired`，现在服务会自动降级到本地规则摘要，但仍建议去设置页更新 Key
 
 ### 启动服务
 

@@ -15,7 +15,12 @@ from typing import Callable
 import httpx
 from yt_dlp import YoutubeDL
 
-from video_sum_core.errors import UnsupportedInputError, VideoSumError
+from video_sum_core.errors import (
+    LLMAuthenticationError,
+    LLMConfigurationError,
+    UnsupportedInputError,
+    VideoSumError,
+)
 from video_sum_core.models.tasks import InputType, TaskResult
 from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineEventReporter, PipelineRunner
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
@@ -618,7 +623,17 @@ class RealPipelineRunner(PipelineRunner):
                 len(transcript),
                 len(segments),
             )
-            summary = self._summarize_with_llm(transcript, segments, title, emit)
+            try:
+                summary = self._summarize_with_llm(transcript, segments, title, emit)
+            except (LLMAuthenticationError, LLMConfigurationError) as exc:
+                logger.warning("llm unavailable, fallback to rule summary reason=%s", exc)
+                emit(
+                    "summarizing",
+                    91,
+                    f"LLM 不可用，已切换为本地规则摘要：{exc}",
+                    {"fallback": "rules", "reason": str(exc)},
+                )
+                summary = self._summarize_with_rules(transcript, segments, title)
         else:
             emit("summarizing", 91, "未启用 LLM，使用本地规则摘要")
             logger.info("rule summary start transcript_chars=%d segments=%d", len(transcript), len(segments))
@@ -648,7 +663,7 @@ class RealPipelineRunner(PipelineRunner):
     ) -> dict[str, object]:
         base_url = (self._settings.llm_base_url or "").rstrip("/")
         if not base_url or not self._settings.llm_model:
-            raise VideoSumError("LLM configuration is incomplete.")
+            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
         chunks = self._build_summary_chunks(segments)
         if not chunks:
             chunks = [
@@ -816,9 +831,12 @@ class RealPipelineRunner(PipelineRunner):
                 self._settings.llm_model,
                 detail,
             )
-            raise VideoSumError(
-                f"LLM request failed with status {exc.response.status_code}: {detail}"
-            ) from exc
+            status_code = exc.response.status_code
+            if status_code in (401, 403):
+                raise LLMAuthenticationError(
+                    f"LLM API Key 无效、已过期，或当前模型/接口无权限访问（HTTP {status_code}: {detail}）。"
+                ) from exc
+            raise VideoSumError(f"LLM request failed with status {status_code}: {detail}") from exc
         logger.info("llm summary response status=%s model=%s", response.status_code, self._settings.llm_model)
         response_json = response.json()
         content = response_json["choices"][0]["message"]["content"]
