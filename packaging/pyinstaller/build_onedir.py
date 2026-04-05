@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import venv
 
 
@@ -18,6 +19,21 @@ SPEC_PATH = ROOT / "packaging" / "pyinstaller" / "briefvid.spec"
 
 def run(command: list[str], cwd: Path | None = None) -> None:
     subprocess.run(command, cwd=cwd or ROOT, check=True)
+
+
+def remove_tree(target: Path, retries: int = 6, delay: float = 0.5) -> None:
+    if not target.exists():
+        return
+    last_error: OSError | None = None
+    for _ in range(retries):
+        try:
+            shutil.rmtree(target)
+            return
+        except OSError as error:
+            last_error = error
+            time.sleep(delay)
+    if last_error is not None:
+        raise last_error
 
 
 def ensure_python_version() -> None:
@@ -49,14 +65,14 @@ def build_python() -> Path:
 
 def create_build_venv() -> None:
     if BUILD_VENV_DIR.exists():
-        shutil.rmtree(BUILD_VENV_DIR)
+        remove_tree(BUILD_VENV_DIR)
     builder = venv.EnvBuilder(with_pip=True, clear=True)
     builder.create(BUILD_VENV_DIR)
 
 
 def create_runtime_seed() -> None:
     if RUNTIME_DIR.exists():
-        shutil.rmtree(RUNTIME_DIR)
+        remove_tree(RUNTIME_DIR)
     RUNTIME_DIR.parent.mkdir(parents=True, exist_ok=True)
 
     builder = venv.EnvBuilder(with_pip=True, clear=True)

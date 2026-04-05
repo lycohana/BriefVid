@@ -1,0 +1,77 @@
+{
+  "name": "briefvid-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BriefVid desktop shell powered by React, Vite, and Electron.",
+  "main": "dist-electron/main.js",
+  "author": {
+    "name": "lycohana"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --config vite.config.ts",
+    "dev:electron": "wait-on tcp:5173 && npm run build:electron && cross-env BRIEFVID_RENDERER_URL=http://127.0.0.1:5173 electron ./dist-electron/main.js",
+    "build:renderer": "vite build --config vite.config.ts",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "package:win": "powershell -ExecutionPolicy Bypass -File ../../packaging/desktop/build_windows.ps1"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.1.4",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.briefvid.desktop",
+    "productName": "BriefVid",
+    "artifactName": "${productName}-${version}-${os}-${arch}-Setup.${ext}",
+    "directories": {
+      "output": "../../dist/desktop"
+    },
+    "files": [
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../../dist/BriefVid",
+        "to": "backend/BriefVid"
+      },
+      {
+        "from": "../../apps/web/static/favicon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "../../apps/web/static/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "perMachine": false
+    }
+  }
+}

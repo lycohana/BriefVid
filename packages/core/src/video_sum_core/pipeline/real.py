@@ -28,7 +28,6 @@ from video_sum_infra.runtime import (
     ffmpeg_location,
     runtime_library_dirs,
     runtime_python_executable,
-    runtime_worker_executable,
     sanitized_subprocess_dll_search,
 )
 
@@ -566,12 +565,8 @@ class RealPipelineRunner(PipelineRunner):
         progress_path: Path,
         output_path: Path,
     ) -> list[str]:
-        worker_executable = runtime_worker_executable(self._settings.runtime_channel)
-        if worker_executable is not None:
-            command = [str(worker_executable)]
-        else:
-            runtime_python = runtime_python_executable(self._settings.runtime_channel) or Path(sys.executable)
-            command = [str(runtime_python), "-m", "video_sum_service.transcribe_worker"]
+        runtime_python = runtime_python_executable(self._settings.runtime_channel) or Path(sys.executable)
+        command = [str(runtime_python), "-m", "video_sum_core.transcribe_subprocess"]
 
         command.extend(
             [

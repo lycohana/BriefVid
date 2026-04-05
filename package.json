@@ -1,0 +1,12 @@
+{
+  "name": "briefvid-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix apps/desktop run dev",
+    "dev:desktop": "npm --prefix apps/desktop run dev",
+    "build": "npm --prefix apps/desktop run build",
+    "build:desktop": "npm --prefix apps/desktop run build",
+    "package:win": "npm --prefix apps/desktop run package:win",
+    "build:win": "npm --prefix apps/desktop run package:win"
+  }
+}

@@ -10,6 +10,8 @@ build/
 *.sqlite3
 *.db
 node_modules/
+apps/desktop/dist-electron/
+apps/desktop/*.tsbuildinfo
 .DS_Store
 Thumbs.db
 temp_repo_inspect/

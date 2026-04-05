@@ -1,0 +1,89 @@
+.desktop-card {
+  display: grid;
+  gap: 16px;
+}
+
+.desktop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.desktop-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.desktop-status-item {
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-default);
+}
+
+.desktop-status-item strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.desktop-status-item span {
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.desktop-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  border-radius: 18px;
+  background: linear-gradient(90deg, rgba(251, 114, 153, 0.18), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(251, 114, 153, 0.22);
+}
+
+.desktop-banner-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.desktop-banner-copy strong {
+  font-size: 15px;
+}
+
+.desktop-banner-copy span {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.empty-state-card {
+  padding: 48px;
+  text-align: center;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 3px solid rgba(251, 114, 153, 0.18);
+  border-top-color: var(--primary);
+  margin: 0 auto 16px;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 960px) {
+  .desktop-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

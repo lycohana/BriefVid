@@ -55,7 +55,6 @@ def test_service_settings_default_to_managed_user_data_dir() -> None:
 def test_transcription_command_falls_back_to_python_module(monkeypatch) -> None:
     runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path("."), runtime_channel="base"))
 
-    monkeypatch.setattr("video_sum_core.pipeline.real.runtime_worker_executable", lambda channel: None)
     monkeypatch.setattr("video_sum_core.pipeline.real.runtime_python_executable", lambda channel: Path("C:/runtime/python.exe"))
 
     command = runner._build_transcription_command(
@@ -68,7 +67,7 @@ def test_transcription_command_falls_back_to_python_module(monkeypatch) -> None:
     )
 
     assert Path(command[0]) == Path("C:/runtime/python.exe")
-    assert command[1:3] == ["-m", "video_sum_service.transcribe_worker"]
+    assert command[1:3] == ["-m", "video_sum_core.transcribe_subprocess"]
     assert "--audio-path" in command
 
 

@@ -455,6 +455,17 @@ def install_cuda_support(cuda_variant: str) -> dict[str, object]:
     if runtime_dir is None or python_executable is None:
         raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
 
+    # Keep managed GPU runtimes aligned with the current workspace package set.
+    # This prevents older side runtimes from retaining stale console entrypoints.
+    try:
+        _install_workspace_packages(python_executable, runtime_channel=runtime_channel)
+    except subprocess.CalledProcessError as exc:
+        clear_environment_probe_cache(runtime_channel)
+        raise HTTPException(
+            status_code=500,
+            detail=((exc.stderr or exc.stdout or str(exc))[-1500:]),
+        ) from exc
+
     command = [
         str(python_executable),
         "-m",
