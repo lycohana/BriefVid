@@ -50,6 +50,10 @@ const desktop = {
   },
   window: {
     show: () => ipcRenderer.invoke("desktop:window:show") as Promise<void>,
+    minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
+    maximize: () => ipcRenderer.invoke("desktop:window:maximize") as Promise<void>,
+    close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
+    isMaximized: () => ipcRenderer.invoke("desktop:window:isMaximized") as Promise<boolean>,
   },
   backend: {
     start: () => ipcRenderer.invoke("desktop:backend:start") as Promise<DesktopBackendStatus>,

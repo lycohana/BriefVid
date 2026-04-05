@@ -16,6 +16,10 @@ type DesktopBridge = {
   };
   window: {
     show(): Promise<void>;
+    minimize(): Promise<void>;
+    maximize(): Promise<void>;
+    close(): Promise<void>;
+    isMaximized(): Promise<boolean>;
   };
   backend: {
     start(): Promise<DesktopBackendStatus>;
