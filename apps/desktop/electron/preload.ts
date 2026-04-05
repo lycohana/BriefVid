@@ -1,5 +1,36 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// 禁用鼠标中键导航（防止打开新窗口）
+// 在 DOM 加载完成后注册事件监听
+document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    window.addEventListener(
+      "auxclick",
+      (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      { capture: true },
+    );
+
+    // 同时阻止 click 事件中的中键
+    window.addEventListener(
+      "click",
+      (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      { capture: true },
+    );
+  },
+  { once: true },
+);
+
 type CloseBehavior = "ask" | "tray" | "exit";
 
 export type DesktopBackendStatus = {
@@ -19,6 +50,10 @@ const desktop = {
   },
   window: {
     show: () => ipcRenderer.invoke("desktop:window:show") as Promise<void>,
+    minimize: () => ipcRenderer.invoke("desktop:window:minimize") as Promise<void>,
+    maximize: () => ipcRenderer.invoke("desktop:window:maximize") as Promise<void>,
+    close: () => ipcRenderer.invoke("desktop:window:close") as Promise<void>,
+    isMaximized: () => ipcRenderer.invoke("desktop:window:isMaximized") as Promise<boolean>,
   },
   backend: {
     start: () => ipcRenderer.invoke("desktop:backend:start") as Promise<DesktopBackendStatus>,
@@ -37,6 +72,8 @@ const desktop = {
   },
   logs: {
     getServiceLogPath: () => ipcRenderer.invoke("desktop:logs:get-service-log-path") as Promise<string>,
+    readServiceLogTail: (lines = 200) =>
+      ipcRenderer.invoke("desktop:logs:read-service-log-tail", lines) as Promise<{ path: string; lines: number; content: string }>,
   },
   preferences: {
     getCloseBehavior: () => ipcRenderer.invoke("desktop:preferences:get-close-behavior") as Promise<CloseBehavior>,

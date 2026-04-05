@@ -1,6 +1,7 @@
-import { FormEvent, SVGProps, useEffect, useMemo, useState } from "react";
+import { FormEvent, SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
+import { TitleBar } from "./components/TitleBar";
 import { api } from "./api";
 import type {
   EnvironmentInfo,
@@ -26,7 +27,13 @@ type Snapshot = {
 
 type DesktopState = {
   version: string;
-  backend: DesktopBackendStatus | null;
+  backend: {
+    running: boolean;
+    ready: boolean;
+    pid: number | null;
+    url: string;
+    lastError: string;
+  } | null;
   logPath: string;
 };
 
@@ -125,6 +132,13 @@ export function App() {
       });
   }, [libraryFilter, query, snapshot.videos]);
 
+  // 首页最近视频列表：始终使用未过滤的视频列表，独立于视频库的搜索和状态过滤
+  const recentVideos = useMemo(() => {
+    return [...snapshot.videos]
+      .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
+      .slice(0, 6);
+  }, [snapshot.videos]);
+
   const runtimeDeviceLabel = useMemo(() => {
     const rawDevice = (
       snapshot.environment?.recommendedDevice
@@ -178,19 +192,22 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <TitleBar />
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark" aria-hidden="true">
-            <img src="/static/assets/icons/icon.svg" alt="" />
-          </div>
-          <div className="brand-text">
-            <p className="eyebrow">Local Video Summary</p>
-            <h1>BriefVid</h1>
-          </div>
-        </div>
-
+        <div className="nav-group-label">主导航</div>
         <nav className="nav">
           <Link className={`nav-item ${location.pathname === "/" ? "active" : ""}`} to="/">
+            <span className="nav-icon" aria-hidden="true"><HomeIcon /></span>
+            <span className="nav-copy">
+              <strong>首页</strong>
+              <small>工作台总览</small>
+            </span>
+          </Link>
+        </nav>
+
+        <div className="nav-group-label">管理</div>
+        <nav className="nav">
+          <Link className={`nav-item ${location.pathname === "/library" ? "active" : ""}`} to="/library">
             <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
             <span className="nav-copy">
               <strong>视频库</strong>
@@ -258,22 +275,33 @@ export function App() {
               <Route
                 path="/"
                 element={(
-                  <LibraryPage
-                    filteredVideos={filteredVideos}
-                    libraryCounts={libraryCounts}
+                  <HomePage
                     latestVideo={latestVideo}
                     probePreview={probePreview}
                     probeUrl={probeUrl}
-                    query={query}
-                    runtimeDeviceLabel={runtimeDeviceLabel}
-                    serviceOnline={snapshot.serviceOnline}
-                    setLibraryFilter={setLibraryFilter}
                     setProbeUrl={setProbeUrl}
-                    setQuery={setQuery}
-                    snapshot={snapshot}
                     submitStatus={submitStatus}
-                    activeFilter={libraryFilter}
+                    serviceOnline={snapshot.serviceOnline}
+                    runtimeDeviceLabel={runtimeDeviceLabel}
                     onProbe={handleProbe}
+                    recentVideos={recentVideos}
+                  />
+                )}
+              />
+              <Route
+                path="/library"
+                element={(
+                  <LibraryPage
+                    snapshot={snapshot}
+                    filteredVideos={filteredVideos}
+                    libraryCounts={libraryCounts}
+                    latestVideo={latestVideo}
+                    query={query}
+                    setQuery={setQuery}
+                    activeFilter={libraryFilter}
+                    setLibraryFilter={setLibraryFilter}
+                    serviceOnline={snapshot.serviceOnline}
+                    runtimeDeviceLabel={runtimeDeviceLabel}
                   />
                 )}
               />
@@ -316,6 +344,93 @@ function Metric({
   );
 }
 
+function HomePage({
+  latestVideo,
+  probePreview,
+  probeUrl,
+  setProbeUrl,
+  submitStatus,
+  serviceOnline,
+  runtimeDeviceLabel,
+  onProbe,
+  recentVideos,
+}: {
+  latestVideo: VideoAssetSummary | null;
+  probePreview: VideoAssetSummary | null;
+  probeUrl: string;
+  setProbeUrl(value: string): void;
+  submitStatus: string;
+  serviceOnline: boolean;
+  runtimeDeviceLabel: string;
+  onProbe(event: FormEvent): Promise<void>;
+  recentVideos: VideoAssetSummary[];
+}) {
+  return (
+    <section className="home-page">
+      {/* 欢迎区域 */}
+      <article className="grid-card welcome-card">
+        <div className="panel-header">
+          <p className="section-kicker">欢迎使用</p>
+          <h2>BriefVid 工作台</h2>
+          <p>输入视频链接，开始本地智能总结。</p>
+        </div>
+
+        <form className="task-form refined-task-form" onSubmit={onProbe}>
+          <div className="task-form-row">
+            <label className="input-row input-row-hero">
+              <span className="input-label">输入视频链接</span>
+              <div className="input-with-icon">
+                <span className="input-icon" aria-hidden="true"><LinkIcon /></span>
+                <input
+                  className="input-field input-field-hero"
+                  type="url"
+                  value={probeUrl}
+                  onChange={(event) => setProbeUrl(event.target.value)}
+                  placeholder="粘贴视频链接，例如 https://www.bilibili.com/video/..."
+                  required
+                />
+              </div>
+            </label>
+            <button className="primary-button primary-button-hero" type="submit">开始总结</button>
+          </div>
+
+          {submitStatus ? <div className="submit-status">{submitStatus}</div> : null}
+        </form>
+
+        {probePreview ? (
+          <article className="probe-preview">
+            <img src={probePreview.cover_url} alt={probePreview.title} />
+            <div className="probe-preview-copy">
+              <span className="section-kicker">即将加入视频库</span>
+              <strong>{probePreview.title}</strong>
+              <small>{formatDuration(probePreview.duration)} · {platformLabel(probePreview.platform)}</small>
+            </div>
+          </article>
+        ) : null}
+      </article>
+
+      {/* 最近视频 */}
+      <article className="grid-card recent-videos-card">
+        <div className="panel-header">
+          <p className="section-kicker">Recent Videos</p>
+          <h2>最近视频</h2>
+          <p>最新处理的 {recentVideos.length} 个视频</p>
+        </div>
+
+        {recentVideos.length > 0 ? (
+          <div className="video-grid">
+            {recentVideos.map((video) => <VideoCard key={video.video_id} video={video} />)}
+          </div>
+        ) : (
+          <div className="empty-placeholder">
+            还没有视频，先输入一个链接开始总结吧。
+          </div>
+        )}
+      </article>
+    </section>
+  );
+}
+
 function LibraryPage({
   snapshot,
   filteredVideos,
@@ -323,15 +438,10 @@ function LibraryPage({
   latestVideo,
   query,
   setQuery,
-  probeUrl,
-  setProbeUrl,
-  submitStatus,
-  probePreview,
   activeFilter,
   setLibraryFilter,
   serviceOnline,
   runtimeDeviceLabel,
-  onProbe,
 }: {
   snapshot: Snapshot;
   filteredVideos: VideoAssetSummary[];
@@ -339,15 +449,10 @@ function LibraryPage({
   latestVideo: VideoAssetSummary | null;
   query: string;
   setQuery(value: string): void;
-  probeUrl: string;
-  setProbeUrl(value: string): void;
-  submitStatus: string;
-  probePreview: VideoAssetSummary | null;
   activeFilter: LibraryFilter;
   setLibraryFilter(value: LibraryFilter): void;
   serviceOnline: boolean;
   runtimeDeviceLabel: string;
-  onProbe(event: FormEvent): Promise<void>;
 }) {
   const filters: Array<{ id: LibraryFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: libraryCounts.total },
@@ -358,81 +463,32 @@ function LibraryPage({
 
   return (
     <section className="library-page">
-      <section className="library-topbar">
-        <article className="grid-card library-intake-card">
-          <div className="panel-header">
-            <p className="section-kicker">Core Action</p>
-            <h2>输入视频链接，立即开始本地总结</h2>
-            <p>先抓取封面与标题，再在本地完成转写、摘要和结果沉淀，入口清晰且保持为第一视觉焦点。</p>
+      {/* 视频库概览 */}
+      <article className="grid-card library-summary-card">
+        <div className="panel-header">
+          <p className="section-kicker">Overview</p>
+          <h2>视频库概览</h2>
+          <p>数据层级保持在第二优先级，用更轻的卡片承接状态概览。</p>
+        </div>
+
+        <div className="library-summary-grid">
+          <Metric label="视频总数" value={String(libraryCounts.total)} detail="本地已收录资产" tone="accent" />
+          <Metric label="已完成" value={String(libraryCounts.completed)} detail="可查看完整摘要" tone="success" />
+          <Metric label="处理中" value={String(libraryCounts.running)} detail="正在进行转写或总结" tone="info" />
+          <Metric label="有结果" value={String(libraryCounts.withResult)} detail="摘要结果已沉淀" />
+        </div>
+
+        <div className="summary-insight">
+          <div className="summary-insight-copy">
+            <span>最近更新</span>
+            <strong>{latestVideo?.title ?? "等待首个视频进入视频库"}</strong>
+            <small>{latestVideo ? `${formatShortDate(latestVideo.updated_at)} · ${platformLabel(latestVideo.platform)}` : "输入链接后自动抓取并入库"}</small>
           </div>
-
-          <form className="task-form refined-task-form" onSubmit={onProbe}>
-            <div className="task-form-row">
-              <label className="input-row input-row-hero">
-                <span className="input-label">输入视频链接</span>
-                <div className="input-with-icon">
-                  <span className="input-icon" aria-hidden="true"><LinkIcon /></span>
-                  <input
-                    className="input-field input-field-hero"
-                    type="url"
-                    value={probeUrl}
-                    onChange={(event) => setProbeUrl(event.target.value)}
-                    placeholder="粘贴视频链接，例如 https://www.bilibili.com/video/..."
-                    required
-                  />
-                </div>
-                <span className="input-caption">支持常见在线视频链接，适合桌面端持续沉淀视频资料和摘要结果。</span>
-              </label>
-              <button className="primary-button primary-button-hero" type="submit">开始总结</button>
-            </div>
-
-            <div className="task-inline-meta">
-              <span className="helper-chip">本地处理</span>
-              <span className="helper-chip">自动抓取封面</span>
-              <span className="helper-chip">沉淀摘要结果</span>
-            </div>
-
-            {submitStatus ? <div className="submit-status">{submitStatus}</div> : null}
-          </form>
-
-          {probePreview ? (
-            <article className="probe-preview">
-              <img src={probePreview.cover_url} alt={probePreview.title} />
-              <div className="probe-preview-copy">
-                <span className="section-kicker">即将加入视频库</span>
-                <strong>{probePreview.title}</strong>
-                <small>{formatDuration(probePreview.duration)} · {platformLabel(probePreview.platform)}</small>
-              </div>
-            </article>
-          ) : null}
-        </article>
-
-        <article className="grid-card library-summary-card">
-          <div className="panel-header">
-            <p className="section-kicker">Overview</p>
-            <h2>视频库概览</h2>
-            <p>数据层级保持在第二优先级，用更轻的卡片承接状态概览。</p>
-          </div>
-
-          <div className="library-summary-grid">
-            <Metric label="视频总数" value={String(libraryCounts.total)} detail="本地已收录资产" tone="accent" />
-            <Metric label="已完成" value={String(libraryCounts.completed)} detail="可查看完整摘要" tone="success" />
-            <Metric label="处理中" value={String(libraryCounts.running)} detail="正在进行转写或总结" tone="info" />
-            <Metric label="有结果" value={String(libraryCounts.withResult)} detail="摘要结果已沉淀" />
-          </div>
-
-          <div className="summary-insight">
-            <div className="summary-insight-copy">
-              <span>最近更新</span>
-              <strong>{latestVideo?.title ?? "等待首个视频进入视频库"}</strong>
-              <small>{latestVideo ? `${formatShortDate(latestVideo.updated_at)} · ${platformLabel(latestVideo.platform)}` : "输入链接后自动抓取并入库"}</small>
-            </div>
-            <span className={`summary-insight-pill ${serviceOnline ? "is-online" : ""}`}>
-              {serviceOnline ? `服务在线 · ${runtimeDeviceLabel}` : "服务离线"}
-            </span>
-          </div>
-        </article>
-      </section>
+          <span className={`summary-insight-pill ${serviceOnline ? "is-online" : ""}`}>
+            {serviceOnline ? `服务在线 · ${runtimeDeviceLabel}` : "服务离线"}
+          </span>
+        </div>
+      </article>
 
       <section className="grid-card library-grid-card">
         <div className="library-section-head">
@@ -480,7 +536,6 @@ function LibraryPage({
 
 function VideoCard({ video }: { video: VideoAssetSummary }) {
   const badgeClass = taskStatusClass(video.latest_status);
-  const statusCopy = video.has_result ? "可查看摘要结果" : `当前阶段：${stageLabel(video.latest_stage)}`;
 
   return (
     <Link className="video-card" to={`/videos/${video.video_id}`}>
@@ -494,17 +549,6 @@ function VideoCard({ video }: { video: VideoAssetSummary }) {
           <span className={`task-status ${badgeClass}`}>{taskStatusLabel(video.latest_status)}</span>
         </div>
         <h3>{video.title}</h3>
-        <p className="video-card-caption">{statusCopy}</p>
-        <div className="video-card-meta-grid">
-          <div className="video-meta-block">
-            <span>最近更新</span>
-            <strong>{formatShortDate(video.updated_at)}</strong>
-          </div>
-          <div className="video-meta-block">
-            <span>结果状态</span>
-            <strong>{video.has_result ? "已输出" : "处理中"}</strong>
-          </div>
-        </div>
       </div>
     </Link>
   );
@@ -518,6 +562,7 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [selectedTask, setSelectedTask] = useState<TaskDetail | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [status, setStatus] = useState("");
+  const lastAutoRefreshEventRef = useRef<string | null>(null);
 
   async function refreshDetail(taskId?: string | null) {
     const [videoDetail, videoTasks] = await Promise.all([api.getVideo(videoId), api.getVideoTasks(videoId)]);
@@ -549,6 +594,27 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     source.onerror = () => source.close();
     return () => source.close();
   }, [selectedTask?.task_id]);
+
+  useEffect(() => {
+    lastAutoRefreshEventRef.current = null;
+  }, [selectedTask?.task_id]);
+
+  useEffect(() => {
+    if (!selectedTask?.task_id || !events.length) return;
+    const terminalEvent = [...events].reverse().find((event) => (
+      event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled"
+    ));
+    if (!terminalEvent) return;
+    const refreshKey = `${selectedTask.task_id}:${terminalEvent.event_id}`;
+    if (lastAutoRefreshEventRef.current === refreshKey) return;
+    lastAutoRefreshEventRef.current = refreshKey;
+
+    const timer = window.setTimeout(() => {
+      void refreshDetail(selectedTask.task_id);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [events, selectedTask?.task_id]);
 
   if (!video) return <section className="grid-card empty-state-card">正在加载视频详情...</section>;
   const progress = summarizeEvents(events);
@@ -758,6 +824,7 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
   const [cudaStatus, setCudaStatus] = useState("");
   const [cudaOutput, setCudaOutput] = useState("");
   const [logOutput, setLogOutput] = useState("");
+  const [logPath, setLogPath] = useState(snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
   const [serviceStatus, setServiceStatus] = useState("");
 
   useEffect(() => {
@@ -765,21 +832,44 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
   }, [snapshot.settings]);
 
   useEffect(() => {
+    setLogPath(snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
+  }, [desktop.logPath, snapshot.systemInfo?.service?.log_file]);
+
+  useEffect(() => {
     void refreshLogs();
   }, []);
 
   async function refreshLogs() {
     try {
-      setLogOutput(await api.getSystemLogs());
+      const response = await api.getSystemLogs();
+      setLogOutput(response.content || "日志文件存在，但当前还没有内容。");
+      setLogPath(response.path || snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
     } catch (error) {
+      try {
+        const fallback = await window.desktop?.logs.readServiceLogTail(200);
+        if (fallback) {
+          setLogOutput(fallback.content || "本地日志文件存在，但当前还没有内容。");
+          setLogPath(fallback.path || snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
+          setServiceStatus("服务接口不可用，已切换为本地日志读取。");
+          return;
+        }
+      } catch {
+        // Ignore local fallback errors and surface the original request error below.
+      }
       setLogOutput(error instanceof Error ? error.message : "读取日志失败");
     }
   }
+
+  const backendRunning = Boolean(desktop.backend?.running);
+  const backendReady = Boolean(desktop.backend?.ready);
+  const serviceOnline = snapshot.serviceOnline;
+  const effectiveLogPath = logPath || snapshot.systemInfo?.service?.log_file || desktop.logPath || "-";
 
   if (!form) return <section className="grid-card empty-state-card">正在加载设置...</section>;
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (!form) return;
     try {
       await api.updateSettings(form);
       setSaveStatus("设置已保存");
@@ -909,46 +999,60 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
           <h2>日志与控制</h2>
           <p>查看后端日志，并直接控制当前内置后端。</p>
         </div>
+        <div className="control-status-row">
+          <span className={`helper-chip ${serviceOnline ? "status-success" : "status-failed"}`}>{serviceOnline ? "服务在线" : "服务离线"}</span>
+          <span className={`helper-chip ${backendRunning ? (backendReady ? "status-success" : "status-running") : "status-pending"}`}>
+            {backendRunning ? (backendReady ? "内置后端运行中" : "内置后端启动中") : "内置后端未运行"}
+          </span>
+          {desktop.backend?.pid ? <span className="helper-chip">PID {desktop.backend.pid}</span> : null}
+        </div>
         <div className="desktop-actions">
           <button className="secondary-button" type="button" onClick={() => void refreshLogs()}>刷新日志</button>
+          <button
+            className={backendRunning ? "secondary-button danger-button" : "primary-button"}
+            type="button"
+            onClick={async () => {
+              if (backendRunning) {
+                await window.desktop?.backend.stop();
+                setServiceStatus("内置后端已停止");
+              } else {
+                await window.desktop?.backend.start();
+                setServiceStatus("已请求启动内置后端");
+              }
+              onRefresh();
+              await refreshLogs();
+            }}
+          >
+            {backendRunning ? "停止内置后端" : "启动内置后端"}
+          </button>
           <button
             className="secondary-button"
             type="button"
             onClick={async () => {
-              await window.desktop?.backend.start();
-              setServiceStatus("已请求启动后端");
-              onRefresh();
+              await window.desktop?.shell.openPath(effectiveLogPath);
             }}
           >
-            启动后端
+            打开日志文件
           </button>
           <button
             className="secondary-button danger-button"
             type="button"
-            onClick={async () => {
-              await window.desktop?.backend.stop();
-              setServiceStatus("后端已停止");
-              onRefresh();
-            }}
-          >
-            停止后端
-          </button>
-          <button
-            className="secondary-button danger-button"
-            type="button"
+            disabled={!serviceOnline}
             onClick={async () => {
               await api.shutdownService();
               setServiceStatus("已向服务发送关闭请求");
               onRefresh();
+              await refreshLogs();
             }}
           >
-            通过 API 关闭服务
+            强制关闭服务
           </button>
         </div>
+        {desktop.backend?.lastError ? <div className="action-status">{desktop.backend.lastError}</div> : null}
         {serviceStatus ? <div className="action-status">{serviceStatus}</div> : null}
         <label className="input-row">
           <span className="input-label">当前日志文件</span>
-          <input className="input-field" value={snapshot.systemInfo?.service?.log_file || desktop.logPath} readOnly />
+          <input className="input-field" value={effectiveLogPath} readOnly />
         </label>
         <label className="input-row">
           <span className="input-label">最近日志</span>
@@ -1026,6 +1130,15 @@ function SettingsIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M12 8.25A3.75 3.75 0 1 0 12 15.75A3.75 3.75 0 1 0 12 8.25Z" />
       <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-4 0v-.1a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1A1 1 0 0 0 6 15.3a1 1 0 0 0-.9-.6H5a2 2 0 0 1 0-4h.1a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a2 2 0 0 1 4 0v.1a1 1 0 0 0 .6.9h.1a1 1 0 0 0 1.1-.2l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6h.1a2 2 0 0 1 0 4h-.1a1 1 0 0 0-.9.6V15Z" />
+    </svg>
+  );
+}
+
+function HomeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 10.5L12 3l9 7.5V20a1.5 1.5 0 0 1-1.5 1.5H4.5A1.5 1.5 0 0 1 3 20V10.5Z" />
+      <path d="M9 21.5V12.5h6v9" />
     </svg>
   );
 }
