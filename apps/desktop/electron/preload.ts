@@ -1,5 +1,36 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// 禁用鼠标中键导航（防止打开新窗口）
+// 在 DOM 加载完成后注册事件监听
+document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    window.addEventListener(
+      "auxclick",
+      (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      { capture: true },
+    );
+
+    // 同时阻止 click 事件中的中键
+    window.addEventListener(
+      "click",
+      (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      { capture: true },
+    );
+  },
+  { once: true },
+);
+
 type CloseBehavior = "ask" | "tray" | "exit";
 
 export type DesktopBackendStatus = {

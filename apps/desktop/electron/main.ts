@@ -438,6 +438,11 @@ function createWindow() {
     },
   });
 
+  // 禁用鼠标中键导航（防止打开新窗口）
+  mainWindow.webContents.setWindowOpenHandler(() => {
+    return { action: "deny" };
+  });
+
   mainWindow.on("close", async (event) => {
     if (forceQuit) {
       return;
