@@ -34,6 +34,27 @@ from video_sum_infra.runtime import (
 logger = logging.getLogger("video_sum_core.pipeline.real")
 
 
+def _windows_hidden_subprocess_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+
+    kwargs: dict[str, object] = {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    use_show_window = getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+    sw_hide = getattr(subprocess, "SW_HIDE", 0)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= use_show_window
+        startupinfo.wShowWindow = sw_hide
+        kwargs["startupinfo"] = startupinfo
+
+    return kwargs
+
+
 def _safe_int(value: object) -> int | None:
     try:
         return int(value) if value is not None else None
@@ -465,7 +486,6 @@ class RealPipelineRunner(PipelineRunner):
             if item and item not in merged_path:
                 merged_path.append(item)
         env["PATH"] = os.pathsep.join(merged_path)
-        creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
         with sanitized_subprocess_dll_search():
             process = subprocess.Popen(
                 command,
@@ -476,7 +496,7 @@ class RealPipelineRunner(PipelineRunner):
                 errors="replace",
                 env=env,
                 cwd=str(audio_path.parent),
-                creationflags=creationflags,
+                **_windows_hidden_subprocess_kwargs(),
             )
 
         progress_offset = 0

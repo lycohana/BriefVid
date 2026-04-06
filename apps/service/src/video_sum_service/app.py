@@ -74,6 +74,27 @@ MAX_LOG_CHARS = 20_000
 MAX_LOG_LINE_CHARS = 1_000
 
 
+def _windows_hidden_subprocess_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+
+    kwargs: dict[str, object] = {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    use_show_window = getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+    sw_hide = getattr(subprocess, "SW_HIDE", 0)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= use_show_window
+        startupinfo.wShowWindow = sw_hide
+        kwargs["startupinfo"] = startupinfo
+
+    return kwargs
+
+
 def _trim_log_text(content: str, *, max_chars: int = MAX_LOG_CHARS, max_line_chars: int = MAX_LOG_LINE_CHARS) -> str:
     lines = content.splitlines()
     trimmed_lines = [
@@ -158,6 +179,7 @@ def _run_command(command: list[str], runtime_channel: str, timeout: int = 3600) 
             check=True,
             env=_runtime_subprocess_env(runtime_channel),
             cwd=managed_runtime_dir(runtime_channel),
+            **_windows_hidden_subprocess_kwargs(),
         )
 
 
