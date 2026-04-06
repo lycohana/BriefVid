@@ -33,6 +33,10 @@ New-Item -ItemType File -Force -Path "$darwinLibDir\libssl.dylib" | Out-Null
 
 Push-Location $desktopDir
 try {
+    # Generate icon before building
+    Write-Host "Generating application icon..."
+    & $python312 (Join-Path $repoRoot "apps\desktop\build\generate_icon.py")
+
     npm run build:renderer
     & $python312 (Join-Path $repoRoot "packaging\pyinstaller\build_onedir.py")
     npm run build:electron

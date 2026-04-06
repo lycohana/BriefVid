@@ -14,7 +14,7 @@ module.exports = {
       "to": "backend/BriefVid"
     },
     {
-      "from": "../../apps/web/static/favicon.ico",
+      "from": "build/icon.ico",
       "to": "icon.ico"
     }
   ],
@@ -27,7 +27,7 @@ module.exports = {
         ]
       }
     ],
-    "icon": "../../apps/web/static/favicon.ico",
+    "icon": "build/icon.ico",
     "sign": null,
     "signAndEditExecutable": false,
     "signDlls": false,
