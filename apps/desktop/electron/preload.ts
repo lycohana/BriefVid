@@ -41,6 +41,17 @@ export type DesktopBackendStatus = {
   lastError: string;
 };
 
+export type UpdateStatus = "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+
+export type UpdateInfo = {
+  status: UpdateStatus;
+  version: string;
+  releaseDate: string;
+  releaseNotes: string | null;
+  downloadProgress: number;
+  errorMessage: string | null;
+};
+
 const desktop = {
   app: {
     getVersion: () => ipcRenderer.invoke("desktop:app:get-version") as Promise<string>,
@@ -80,6 +91,19 @@ const desktop = {
     setCloseBehavior: (value: CloseBehavior) =>
       ipcRenderer.invoke("desktop:preferences:set-close-behavior", value) as Promise<CloseBehavior>,
     resetCloseBehavior: () => ipcRenderer.invoke("desktop:preferences:reset-close-behavior") as Promise<CloseBehavior>,
+  },
+  update: {
+    check: () => ipcRenderer.invoke("desktop:update:check") as Promise<UpdateInfo>,
+    download: () => ipcRenderer.invoke("desktop:update:download") as Promise<UpdateInfo>,
+    install: () => ipcRenderer.invoke("desktop:update:install") as Promise<void>,
+    getStatus: () => ipcRenderer.invoke("desktop:update:get-status") as Promise<UpdateInfo>,
+    onStatus: (listener: (status: UpdateInfo) => void) => {
+      const wrapped = (_event: unknown, payload: UpdateInfo) => listener(payload);
+      ipcRenderer.on("desktop:update:status-changed", wrapped);
+      return () => {
+        ipcRenderer.removeListener("desktop:update:status-changed", wrapped);
+      };
+    },
   },
 };
 

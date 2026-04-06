@@ -14,7 +14,7 @@ module.exports = {
       "to": "backend/BriefVid"
     },
     {
-      "from": "../../apps/web/static/favicon.ico",
+      "from": "build/icon.ico",
       "to": "icon.ico"
     }
   ],
@@ -27,18 +27,29 @@ module.exports = {
         ]
       }
     ],
-    "icon": "../../apps/web/static/favicon.ico",
+    "icon": "build/icon.ico",
     "sign": null,
     "signAndEditExecutable": false,
     "signDlls": false,
-    "requestedExecutionLevel": "asInvoker"
+    "requestedExecutionLevel": "asInvoker",
+    "fileAssociations": []
   },
   nsis: {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     allowElevation: true,
     createDesktopShortcut: true,
-    perMachine: false
+    perMachine: false,
+    shortcutName: "BriefVid",
+    uninstallDisplayName: "BriefVid",
+    installerIcon: "build/icon.ico",
+    uninstallerIcon: "build/icon.ico"
+  },
+  publish: {
+    provider: "github",
+    owner: "lycohana",
+    repo: "BriefVid",
+    releaseType: "release"
   },
   // Disable code signing completely
   afterSign: null
