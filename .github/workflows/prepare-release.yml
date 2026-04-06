@@ -97,14 +97,51 @@ jobs:
           CSC_PLATFORM: "windows"
         run: npm run package:win
 
+      - name: Collect release assets
+        shell: pwsh
+        run: |
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE "dist\desktop"
+          $assetDir = Join-Path $env:GITHUB_WORKSPACE "dist\release-assets"
+
+          if (-not (Test-Path $sourceDir)) {
+            throw "Desktop build output directory not found: $sourceDir"
+          }
+
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+          $installer = Get-ChildItem -Path $sourceDir -Recurse -File |
+            Where-Object { $_.Name -like "BriefVid-*-Setup.exe" } |
+            Select-Object -First 1
+          if (-not $installer) {
+            Get-ChildItem -Path $sourceDir -Recurse | Select-Object FullName
+            throw "No Windows installer matching BriefVid-*-Setup.exe was found under $sourceDir"
+          }
+
+          $blockmap = Get-Item -LiteralPath "$($installer.FullName).blockmap" -ErrorAction SilentlyContinue
+          if (-not $blockmap) {
+            throw "Installer blockmap not found for $($installer.Name)"
+          }
+
+          $latestYml = Join-Path $sourceDir "latest.yml"
+          if (-not (Test-Path $latestYml)) {
+            throw "latest.yml was not found under $sourceDir"
+          }
+
+          Copy-Item -LiteralPath $installer.FullName -Destination $assetDir -Force
+          Copy-Item -LiteralPath $blockmap.FullName -Destination $assetDir -Force
+          Copy-Item -LiteralPath $latestYml -Destination $assetDir -Force
+
+          Write-Host "Collected release assets:"
+          Get-ChildItem -Path $assetDir | Select-Object Name, Length
+
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: |
-            dist/desktop/BriefVid-*-Setup.exe
-            dist/desktop/BriefVid-*-Setup.exe.blockmap
-            dist/desktop/latest.yml
+            dist/release-assets/BriefVid-*-Setup.exe
+            dist/release-assets/BriefVid-*-Setup.exe.blockmap
+            dist/release-assets/latest.yml
           if-no-files-found: error
 
   create-release-tag:
@@ -180,7 +217,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
-          path: dist/desktop
+          path: dist/release-assets
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -188,6 +225,6 @@ jobs:
           tag_name: v${{ needs.detect-release.outputs.next_version }}
           generate_release_notes: true
           files: |
-            dist/desktop/BriefVid-*-Setup.exe
-            dist/desktop/BriefVid-*-Setup.exe.blockmap
-            dist/desktop/latest.yml
+            dist/release-assets/BriefVid-*-Setup.exe
+            dist/release-assets/BriefVid-*-Setup.exe.blockmap
+            dist/release-assets/latest.yml
