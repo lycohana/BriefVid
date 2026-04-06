@@ -1169,6 +1169,11 @@ textarea {
   gap: 18px;
 }
 
+.video-detail-sidebar {
+  align-content: start;
+  align-self: start;
+}
+
 .detail-section-card,
 .detail-side-card,
 .result-card,

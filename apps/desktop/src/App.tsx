@@ -186,8 +186,8 @@ export function App() {
       }
       : {
         eyebrow: "BriefVid Workspace",
-        title: "你的本地视频摘要工作台",
-        description: "输入链接、触发本地处理，并把视频结果沉淀成持续可检索的视频资产库。",
+        title: "懒得看视频？一键省流！",
+        description: "把时间留给真正有质量的视频",
       };
 
   return (
@@ -226,7 +226,7 @@ export function App() {
         <section className="live-panel">
           <div className="panel-header panel-header-subtle">
             <h2>运行状态</h2>
-            <p>低频系统信息收纳在侧边，不打断主流程。</p>
+            <p></p>
           </div>
           <div className="status-stack">
             <SidebarStatusItem

@@ -937,9 +937,13 @@ body {
 
 .video-detail-primary,
 .video-detail-sidebar {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-5);
-  align-content: start;
+}
+
+.video-detail-sidebar {
+  align-self: start;
 }
 
 .detail-side-card {
