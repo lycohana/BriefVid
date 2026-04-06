@@ -103,6 +103,8 @@ jobs:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: |
             dist/desktop/BriefVid-*-Setup.exe
+            dist/desktop/BriefVid-*-Setup.exe.blockmap
+            dist/desktop/latest.yml
           if-no-files-found: error
 
   create-release-tag:
@@ -187,3 +189,5 @@ jobs:
           generate_release_notes: true
           files: |
             dist/desktop/BriefVid-*-Setup.exe
+            dist/desktop/BriefVid-*-Setup.exe.blockmap
+            dist/desktop/latest.yml

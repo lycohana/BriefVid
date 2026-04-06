@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy
 ROOT = Path.cwd().resolve()
 BUILD_ROOT = ROOT / "build" / "pyinstaller"
 WEB_STATIC_DIR = ROOT / "apps" / "web" / "static"
-ICON_PATH = WEB_STATIC_DIR / "favicon.ico"
+ICON_PATH = ROOT / "apps" / "desktop" / "build" / "icon.ico"
 RUNTIME_SEED_DIR = BUILD_ROOT / "runtime" / "base"
 BIN_DIR = BUILD_ROOT / "bin"
 
@@ -18,13 +18,13 @@ if RUNTIME_SEED_DIR.exists():
 if BIN_DIR.exists():
     datas += [(str(BIN_DIR), "bin")]
 
+# 仅复制 faster_whisper 必要的配置和数据文件（不包含大型模型文件）
 datas += collect_data_files("faster_whisper")
-datas += copy_metadata("yt-dlp")
+
+# 简化元数据复制，移除非必要的包元数据
 datas += copy_metadata("faster-whisper")
 datas += copy_metadata("pydantic")
 datas += copy_metadata("pydantic-settings")
-datas += copy_metadata("uvicorn")
-datas += copy_metadata("fastapi")
 
 hiddenimports = []
 hiddenimports += collect_submodules("video_sum_service")
@@ -62,7 +62,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
 )
 

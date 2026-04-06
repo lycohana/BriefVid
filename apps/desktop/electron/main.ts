@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { ChildProcess, spawn, SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -14,6 +14,7 @@ import {
   shell,
   Tray,
 } from "electron";
+import { autoUpdater, ProgressInfo, UpdateInfo as ElectronUpdateInfo } from "electron-updater";
 
 type CloseBehavior = "ask" | "tray" | "exit";
 
@@ -31,10 +32,22 @@ type BackendStatus = {
   lastError: string;
 };
 
+type UpdateStatus = "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+
+type UpdateInfo = {
+  status: UpdateStatus;
+  version: string;
+  releaseDate: string;
+  releaseNotes: string | null;
+  downloadProgress: number;
+  errorMessage: string | null;
+};
+
 const isDev = !app.isPackaged;
 const repoRoot = path.resolve(__dirname, "../../..");
 const rendererUrl = process.env.BRIEFVID_RENDERER_URL ?? "http://127.0.0.1:5173";
 const backendUrl = "http://127.0.0.1:3838";
+const updaterConfigPath = path.join(process.resourcesPath, "app-update.yml");
 const iconPath = isDev
   ? path.resolve(repoRoot, "apps/web/static/favicon.ico")
   : path.join(process.resourcesPath, "icon.ico");
@@ -52,6 +65,17 @@ let backendStatus: BackendStatus = {
   url: backendUrl,
   lastError: "",
 };
+
+// 更新管理器状态
+let updateStatus: UpdateInfo = {
+  status: "idle",
+  version: "",
+  releaseDate: "",
+  releaseNotes: null,
+  downloadProgress: 0,
+  errorMessage: null,
+};
+let pendingUpdateInfo: ElectronUpdateInfo | null = null;
 
 function getLocalAppDataDir() {
   return process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || app.getPath("home"), "AppData", "Local");
@@ -312,9 +336,16 @@ function resolveDevPython(): { command: string; args: string[]; cwd: string } {
       cwd: repoRoot,
     };
   }
-  const venvPython = path.resolve(repoRoot, ".venv/Scripts/python.exe");
-  if (process.platform === "win32" && fs.existsSync(venvPython)) {
-    return { command: venvPython, args: ["-m", "video_sum_service"], cwd: repoRoot };
+  if (process.platform === "win32") {
+    const venvPythonw = path.resolve(repoRoot, ".venv/Scripts/pythonw.exe");
+    if (fs.existsSync(venvPythonw)) {
+      return { command: venvPythonw, args: ["-m", "video_sum_service"], cwd: repoRoot };
+    }
+
+    const venvPython = path.resolve(repoRoot, ".venv/Scripts/python.exe");
+    if (fs.existsSync(venvPython)) {
+      return { command: venvPython, args: ["-m", "video_sum_service"], cwd: repoRoot };
+    }
   }
   return { command: "python", args: ["-m", "video_sum_service"], cwd: repoRoot };
 }
@@ -335,7 +366,9 @@ async function startBackend(): Promise<BackendStatus> {
   }
 
   const target = isDev ? resolveDevPython() : resolvePackagedBackend();
-  backendProcess = spawn(target.command, target.args, {
+  
+  // Windows 上隐藏控制台窗口
+  const spawnOptions: SpawnOptions = {
     cwd: target.cwd,
     env: {
       ...process.env,
@@ -345,7 +378,15 @@ async function startBackend(): Promise<BackendStatus> {
     stdio: "ignore",
     detached: false,
     windowsHide: true,
-  });
+    shell: false,
+  };
+  
+  // 在 Windows 上，如果子进程是控制台应用，使用 CREATE_NO_WINDOW 标志
+  if (process.platform === "win32") {
+    (spawnOptions as any).windowsVerbatimArguments = true;
+  }
+  
+  backendProcess = spawn(target.command, target.args, spawnOptions);
 
   backendProcess.once("exit", (_code, signal) => {
     backendProcess = null;
@@ -566,6 +607,177 @@ function createTray() {
   rebuildTrayMenu();
 }
 
+// 更新管理器函数
+function sendUpdateStatus() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send("desktop:update:status-changed", updateStatus);
+}
+
+function updateUpdateStatus(patch: Partial<UpdateInfo>) {
+  updateStatus = { ...updateStatus, ...patch };
+  sendUpdateStatus();
+}
+
+function getUpdaterUnavailableMessage() {
+  return `当前安装包未包含自动更新配置：${updaterConfigPath}`;
+}
+
+function canUseAutoUpdater() {
+  return !isDev && fs.existsSync(updaterConfigPath);
+}
+
+function initializeUpdater() {
+  // 开发环境下完全禁用 autoUpdater，避免读取 app-update.yml 文件
+  if (isDev) {
+    updateUpdateStatus({ status: "not-available", errorMessage: null });
+    return;
+  }
+
+  if (!canUseAutoUpdater()) {
+    updateUpdateStatus({
+      status: "not-available",
+      errorMessage: getUpdaterUnavailableMessage(),
+    });
+    return;
+  }
+
+  try {
+    // 配置 autoUpdater
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.allowDowngrade = true;
+    autoUpdater.allowPrerelease = false;
+
+    // 监听更新事件
+    autoUpdater.on("checking-for-update", () => {
+      updateUpdateStatus({ status: "checking" });
+    });
+
+    autoUpdater.on("update-available", (info: ElectronUpdateInfo) => {
+      pendingUpdateInfo = info;
+      updateUpdateStatus({
+        status: "available",
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes as string | null,
+        errorMessage: null,
+      });
+    });
+
+    autoUpdater.on("update-not-available", () => {
+      updateUpdateStatus({ status: "not-available" });
+    });
+
+    autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+      updateUpdateStatus({
+        status: "downloading",
+        downloadProgress: progress.percent,
+      });
+    });
+
+    autoUpdater.on("update-downloaded", (info: ElectronUpdateInfo) => {
+      pendingUpdateInfo = info;
+      updateUpdateStatus({
+        status: "downloaded",
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes as string | null,
+        downloadProgress: 100,
+      });
+    });
+
+    autoUpdater.on("error", (error: Error) => {
+      updateUpdateStatus({
+        status: "error",
+        errorMessage: error.message,
+      });
+    });
+
+    // 启动时静默检查更新（延迟 5 秒）
+    setTimeout(() => {
+      if (!updateStatus.status || updateStatus.status === "idle") {
+        checkForUpdates();
+      }
+    }, 5000);
+  } catch (error) {
+    // 如果初始化失败（例如缺少 app-update.yml），禁用更新功能
+    console.error("Failed to initialize autoUpdater:", error);
+    updateStatus.status = "error";
+    updateStatus.errorMessage = error instanceof Error ? error.message : "更新系统初始化失败";
+  }
+}
+
+function checkForUpdates(): Promise<UpdateInfo> {
+  return new Promise((resolve) => {
+    if (isDev) {
+      // 开发环境下模拟检查更新
+      updateUpdateStatus({ status: "not-available", errorMessage: null });
+      resolve(updateStatus);
+      return;
+    }
+
+    if (!canUseAutoUpdater()) {
+      updateUpdateStatus({
+        status: "not-available",
+        errorMessage: getUpdaterUnavailableMessage(),
+      });
+      resolve(updateStatus);
+      return;
+    }
+
+    const check = async () => {
+      try {
+        await autoUpdater.checkForUpdates();
+        resolve(updateStatus);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "检查更新失败";
+        updateUpdateStatus({ status: "error", errorMessage });
+        resolve(updateStatus);
+      }
+    };
+    check();
+  });
+}
+
+function downloadUpdate(): Promise<UpdateInfo> {
+  return new Promise((resolve, reject) => {
+    if (isDev) {
+      updateUpdateStatus({ status: "downloaded", version: "dev-build" });
+      resolve(updateStatus);
+      return;
+    }
+
+    if (!canUseAutoUpdater()) {
+      const error = new Error(getUpdaterUnavailableMessage());
+      updateUpdateStatus({ status: "not-available", errorMessage: error.message });
+      reject(error);
+      return;
+    }
+
+    if (updateStatus.status !== "available") {
+      reject(new Error("没有可用的更新"));
+      return;
+    }
+
+    autoUpdater.downloadUpdate().catch((error: Error) => {
+      updateUpdateStatus({
+        status: "error",
+        errorMessage: error.message || "下载更新失败",
+      });
+      reject(error);
+    });
+  });
+}
+
+function installAndRestart(): void {
+  if (isDev || !canUseAutoUpdater()) {
+    return;
+  }
+  autoUpdater.quitAndInstall();
+}
+
 function registerIpcHandlers() {
   ipcMain.handle("desktop:app:get-version", () => app.getVersion());
   ipcMain.handle("desktop:app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
@@ -596,6 +808,12 @@ function registerIpcHandlers() {
     return value;
   });
   ipcMain.handle("desktop:preferences:reset-close-behavior", () => resetCloseBehavior());
+  
+  // 更新相关 IPC
+  ipcMain.handle("desktop:update:check", async () => checkForUpdates());
+  ipcMain.handle("desktop:update:download", async () => downloadUpdate());
+  ipcMain.handle("desktop:update:install", () => installAndRestart());
+  ipcMain.handle("desktop:update:get-status", () => updateStatus);
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -610,6 +828,7 @@ if (!gotLock) {
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
+  initializeUpdater();
   createWindow();
   createTray();
 

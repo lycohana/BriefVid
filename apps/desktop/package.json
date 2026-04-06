@@ -17,6 +17,7 @@
     "package:win": "powershell -ExecutionPolicy Bypass -File ../../packaging/desktop/build_windows.ps1"
   },
   "dependencies": {
+    "electron-updater": "^6.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.5.0"
@@ -73,6 +74,12 @@
       "allowElevation": true,
       "createDesktopShortcut": true,
       "perMachine": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lycohana",
+      "repo": "BriefVid",
+      "releaseType": "release"
     }
   }
 }

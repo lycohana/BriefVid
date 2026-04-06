@@ -31,7 +31,8 @@ module.exports = {
     "sign": null,
     "signAndEditExecutable": false,
     "signDlls": false,
-    "requestedExecutionLevel": "asInvoker"
+    "requestedExecutionLevel": "asInvoker",
+    "fileAssociations": []
   },
   nsis: {
     oneClick: false,
@@ -39,6 +40,12 @@ module.exports = {
     allowElevation: true,
     createDesktopShortcut: true,
     perMachine: false
+  },
+  publish: {
+    provider: "github",
+    owner: "lycohana",
+    repo: "BriefVid",
+    releaseType: "release"
   },
   // Disable code signing completely
   afterSign: null

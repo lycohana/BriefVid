@@ -2,6 +2,7 @@ import { FormEvent, SVGProps, useEffect, useMemo, useRef, useState } from "react
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { TitleBar } from "./components/TitleBar";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { api } from "./api";
 import type {
   EnvironmentInfo,
@@ -37,6 +38,15 @@ type DesktopState = {
   logPath: string;
 };
 
+type UpdateState = {
+  status: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+  version: string;
+  releaseDate: string;
+  releaseNotes: string | null;
+  downloadProgress: number;
+  errorMessage: string | null;
+};
+
 type LibraryFilter = "all" | "completed" | "running" | "with-result";
 type MetricTone = "default" | "accent" | "success" | "info";
 
@@ -53,6 +63,17 @@ export function App() {
   const [submitStatus, setSubmitStatus] = useState("");
   const [probePreview, setProbePreview] = useState<VideoAssetSummary | null>(null);
   const [refreshSeed, setRefreshSeed] = useState(0);
+  
+  // 更新状态
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>({
+    status: "idle",
+    version: "",
+    releaseDate: "",
+    releaseNotes: null,
+    downloadProgress: 0,
+    errorMessage: null,
+  });
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -65,9 +86,31 @@ export function App() {
       ]);
       setDesktop({ version, backend, logPath });
       cleanup = window.desktop.backend.onStatus((status) => setDesktop((current) => ({ ...current, backend: status })));
+      
+      // 监听更新状态
+      const updateCleanup = window.desktop.update?.onStatus((status) => {
+        setUpdateState({
+          status: status.status,
+          version: status.version,
+          releaseDate: status.releaseDate,
+          releaseNotes: status.releaseNotes,
+          downloadProgress: status.downloadProgress,
+          errorMessage: status.errorMessage,
+        });
+        
+        // 当有可用更新时自动打开对话框
+        if (status.status === "available" || status.status === "downloaded") {
+          setUpdateDialogOpen(true);
+        }
+      });
+      
+      return () => {
+        cleanup?.();
+        updateCleanup?.();
+      };
     }
     void bootstrap();
-    return () => cleanup?.();
+    return () => {};
   }, []);
 
   useEffect(() => {
@@ -311,6 +354,36 @@ export function App() {
           )}
         </div>
       </main>
+      
+      <UpdateDialog
+        isOpen={updateDialogOpen}
+        updateInfo={updateState as any}
+        currentVersion={desktop.version}
+        onClose={() => setUpdateDialogOpen(false)}
+        onCheck={async () => {
+          if (window.desktop?.update) {
+            const result = await window.desktop.update.check();
+            setUpdateState({
+              status: result.status,
+              version: result.version,
+              releaseDate: result.releaseDate,
+              releaseNotes: result.releaseNotes,
+              downloadProgress: result.downloadProgress,
+              errorMessage: result.errorMessage,
+            });
+          }
+        }}
+        onDownload={async () => {
+          if (window.desktop?.update) {
+            await window.desktop.update.download();
+          }
+        }}
+        onInstall={async () => {
+          if (window.desktop?.update) {
+            await window.desktop.update.install();
+          }
+        }}
+      />
     </div>
   );
 }
@@ -826,6 +899,8 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
   const [logOutput, setLogOutput] = useState("");
   const [logPath, setLogPath] = useState(snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
   const [serviceStatus, setServiceStatus] = useState("");
+  const [updateStatus, setUpdateStatus] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     setForm(snapshot.settings);
@@ -1058,6 +1133,67 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
           <span className="input-label">最近日志</span>
           <textarea className="textarea-field log-viewer" rows={16} readOnly value={logOutput}></textarea>
         </label>
+      </article>
+
+      <article className="grid-card settings-wide">
+        <div className="panel-header">
+          <p className="section-kicker">About & Updates</p>
+          <h2>关于与更新</h2>
+          <p>检查新版本并查看更新日志。</p>
+        </div>
+        <div className="setting-list">
+          <div className="setting-row">
+            <span className="setting-label">当前版本</span>
+            <span className="setting-value">
+              <code>v{desktop.version}</code>
+            </span>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">更新状态</span>
+            <span className="setting-value">{updateStatus || "未检查"}</span>
+          </div>
+        </div>
+        <div className="desktop-actions">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={checkingUpdate}
+            onClick={async () => {
+              setCheckingUpdate(true);
+              setUpdateStatus("正在检查更新...");
+              try {
+                const result = await window.desktop?.update?.check();
+                if (result) {
+                  if (result.status === "available") {
+                    setUpdateStatus(`发现新版本：v${result.version}`);
+                  } else if (result.status === "not-available") {
+                    setUpdateStatus("已是最新版本");
+                  } else if (result.status === "error") {
+                    setUpdateStatus(`检查失败：${result.errorMessage}`);
+                  } else {
+                    setUpdateStatus(`状态：${result.status}`);
+                  }
+                }
+              } catch (error) {
+                setUpdateStatus(error instanceof Error ? error.message : "检查更新失败");
+              } finally {
+                setCheckingUpdate(false);
+              }
+            }}
+          >
+            {checkingUpdate ? "检查中..." : "检查更新"}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              setUpdateStatus("");
+            }}
+          >
+            清除状态
+          </button>
+        </div>
+        {updateStatus ? <div className="action-status">{updateStatus}</div> : null}
       </article>
     </section>
   );
