@@ -412,9 +412,12 @@ python -m pytest -q
 - 校验脚本为 `python scripts/bump_version.py --check`
 - GitHub Actions 会在推送到 `main` 或 `master` 后自动判断是否发版
 - 自动 bump 规则如下：
-  - `feat:` -> `minor`
-  - `fix:` / `perf:` / `refactor:` -> `patch`
-  - `feat!:`、`fix!:`、`perf!:`、`refactor!:` 或提交正文包含 `BREAKING CHANGE` -> `major`
+  - 只有提交标题里显式带 `*` 的 `feat` / `fix` / `perf` / `refactor` 才会参与自动发版
+  - `feat*:` -> `minor`
+  - `fix*:` / `perf*:` / `refactor*:` -> `patch`
+  - 原有 breaking 规则保留：`feat!:`、`fix!:`、`perf!:`、`refactor!:`，或提交正文包含 `BREAKING CHANGE` -> `major`
+  - `feat*!:`、`fix*!:` 这类同时带 `*` 和 `!` 的写法也支持，仍按 `major` 处理
+  - 不带 `*` / `!` 的 `feat:`、`fix:`、`perf:`、`refactor:` 默认不发版
   - `docs:`、`chore:`、`ci:` 等默认不发版
 - 每次检测到版本更新时，都会在同一个 workflow 里构建 Windows 安装程序并创建 GitHub Release
 - 自动发版前会先在 GitHub Actions 的 Windows runner 上真实执行一次 `npm run package:win`

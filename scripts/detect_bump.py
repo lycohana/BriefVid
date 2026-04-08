@@ -10,10 +10,11 @@ from versioning import bump_version, read_source_version
 
 COMMIT_SEPARATOR = "\x1e"
 FIELD_SEPARATOR = "\x1f"
-BREAKING_RE = re.compile(r"^[A-Za-z][\w/-]*(\([^)]*\))?!:")
-FEATURE_RE = re.compile(r"^feat(\([^)]*\))?!?:")
-PATCH_RE = re.compile(r"^(fix|perf|refactor)(\([^)]*\))?!?:")
+COMMIT_HEADER_RE = re.compile(r"^(?P<type>[A-Za-z][\w/-]*)(?:\([^)]*\))?(?P<markers>[!*]*):")
 RELEASE_RE = re.compile(r"^chore\(release\):\s+v\d+\.\d+\.\d+$")
+MINOR_TYPES = {"feat"}
+PATCH_TYPES = {"fix", "perf", "refactor"}
+RELEASABLE_TYPES = MINOR_TYPES | PATCH_TYPES
 
 
 def run_git(*args: str) -> str:
@@ -62,23 +63,50 @@ def commits_since(ref: str) -> list[tuple[str, str]]:
     return commits
 
 
+def parse_commit_subject(subject: str) -> tuple[str, str] | None:
+    match = COMMIT_HEADER_RE.match(subject)
+    if not match:
+        return None
+    return match.group("type"), match.group("markers")
+
+
+def is_breaking_change(markers: str, body: str) -> bool:
+    return "!" in markers or "BREAKING CHANGE" in body.upper()
+
+
+def should_release_commit(commit_type: str, markers: str, body: str) -> bool:
+    if commit_type not in RELEASABLE_TYPES:
+        return False
+    return "*" in markers or is_breaking_change(markers, body)
+
+
 def detect_bump(commits: list[tuple[str, str]]) -> str:
     filtered = [(subject, body) for subject, body in commits if subject and not RELEASE_RE.match(subject)]
     if not filtered:
         return ""
 
+    parsed_commits: list[tuple[str, str, str]] = []
     for subject, body in filtered:
-        if (FEATURE_RE.match(subject) or PATCH_RE.match(subject)) and (
-            BREAKING_RE.match(subject) or "BREAKING CHANGE" in body.upper()
-        ):
+        parsed = parse_commit_subject(subject)
+        if parsed is None:
+            continue
+        commit_type, markers = parsed
+        if should_release_commit(commit_type, markers, body):
+            parsed_commits.append((commit_type, markers, body))
+
+    if not parsed_commits:
+        return ""
+
+    for commit_type, markers, body in parsed_commits:
+        if commit_type in RELEASABLE_TYPES and is_breaking_change(markers, body):
             return "major"
 
-    for subject, _body in filtered:
-        if FEATURE_RE.match(subject):
+    for commit_type, _markers, _body in parsed_commits:
+        if commit_type in MINOR_TYPES:
             return "minor"
 
-    for subject, _body in filtered:
-        if PATCH_RE.match(subject):
+    for commit_type, _markers, _body in parsed_commits:
+        if commit_type in PATCH_TYPES:
             return "patch"
 
     return ""
