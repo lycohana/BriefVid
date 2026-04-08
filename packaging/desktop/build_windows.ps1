@@ -38,8 +38,20 @@ try {
     if (-not (Test-Path $iconScript)) {
         throw "Icon generator script was not found: $iconScript"
     }
+    Write-Host "Ensuring Pillow is available for icon generation..."
+    & $python312 -c "from PIL import Image" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Pillow is missing; installing Pillow into the selected Python 3.12 environment..."
+        & $python312 -m pip install --disable-pip-version-check Pillow
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install Pillow for icon generation."
+        }
+    }
     Write-Host "Generating application icon..."
     & $python312 $iconScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Application icon generation failed."
+    }
 
     npm run build:renderer
     & $python312 (Join-Path $repoRoot "packaging\pyinstaller\build_onedir.py")

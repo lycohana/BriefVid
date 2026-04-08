@@ -14,7 +14,7 @@ module.exports = {
       "to": "backend/BriefVid"
     },
     {
-      "from": "../../apps/web/static/favicon.ico",
+      "from": "../../apps/desktop/build/icon.ico",
       "to": "icon.ico"
     }
   ],
@@ -27,7 +27,7 @@ module.exports = {
         ]
       }
     ],
-    "icon": "../../apps/web/static/favicon.ico",
+    "icon": "../../apps/desktop/build/icon.ico",
     "sign": null,
     "signAndEditExecutable": false,
     "signDlls": false,
@@ -42,8 +42,8 @@ module.exports = {
     perMachine: false,
     shortcutName: "BriefVid",
     uninstallDisplayName: "BriefVid",
-    installerIcon: "../../apps/web/static/favicon.ico",
-    uninstallerIcon: "../../apps/web/static/favicon.ico"
+    installerIcon: "../../apps/desktop/build/icon.ico",
+    uninstallerIcon: "../../apps/desktop/build/icon.ico"
   },
   publish: {
     provider: "github",

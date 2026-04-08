@@ -51,7 +51,7 @@
         "to": "backend/BriefVid"
       },
       {
-        "from": "../../apps/web/static/favicon.ico",
+        "from": "../../apps/desktop/build/icon.ico",
         "to": "icon.ico"
       }
     ],
@@ -64,7 +64,7 @@
           ]
         }
       ],
-      "icon": "../../apps/web/static/favicon.ico",
+      "icon": "../../apps/desktop/build/icon.ico",
       "signAndEditExecutable": false,
       "signDlls": false
     },
@@ -73,7 +73,9 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "createDesktopShortcut": true,
-      "perMachine": false
+      "perMachine": false,
+      "installerIcon": "../../apps/desktop/build/icon.ico",
+      "uninstallerIcon": "../../apps/desktop/build/icon.ico"
     },
     "publish": {
       "provider": "github",

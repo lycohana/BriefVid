@@ -49,7 +49,7 @@ const rendererUrl = process.env.BRIEFVID_RENDERER_URL ?? "http://127.0.0.1:5173"
 const backendUrl = "http://127.0.0.1:3838";
 const updaterConfigPath = path.join(process.resourcesPath, "app-update.yml");
 const iconPath = isDev
-  ? path.resolve(repoRoot, "apps/web/static/favicon.ico")
+  ? path.resolve(repoRoot, "apps/desktop/build/icon.ico")
   : path.join(process.resourcesPath, "icon.ico");
 const preferencesPath = path.join(app.getPath("userData"), "desktop-preferences.json");
 

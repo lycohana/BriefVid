@@ -2,7 +2,7 @@
 from pathlib import Path
 import os
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 
 ROOT = Path.cwd().resolve()
@@ -83,13 +83,10 @@ def collect_runtime_files(source_dir: Path, dest_dir: str, exclude_packages: lis
     
     return result
 
-# 显式收集 ffmpeg 二进制文件到 binaries，确保 yt_dlp 能找到
+# FFmpeg 统一只通过 datas/bin 分发一份。
+# 运行时会从 bundled_root()/bin 查找 ffmpeg.exe，避免同时在
+# PyInstaller _internal 根目录和 bin/ 目录各保留一份。
 binaries = []
-if BIN_DIR.exists():
-    if (BIN_DIR / "ffmpeg.exe").exists():
-        binaries += [(str(BIN_DIR / "ffmpeg.exe"), "ffmpeg.exe")]
-    if (BIN_DIR / "ffprobe.exe").exists():
-        binaries += [(str(BIN_DIR / "ffprobe.exe"), "ffprobe.exe")]
 
 datas = []
 datas += [(str(WEB_STATIC_DIR), "web/static")]
@@ -98,11 +95,10 @@ datas += collect_runtime_files(RUNTIME_SEED_DIR, "runtime/base", RUNTIME_EXCLUDE
 if BIN_DIR.exists():
     datas += [(str(BIN_DIR), "bin")]
 
-# 仅复制 faster_whisper 必要的配置和数据文件（不包含大型模型文件）
-datas += collect_data_files("faster_whisper")
-
+# runtime/base 会作为完整 seed runtime 原样随安装包分发，
+# 主服务 EXE 不再重复携带 faster-whisper 的数据和元数据，
+# 否则会在 _internal 与 runtime/base 中各保留一份重依赖。
 # 简化元数据复制，移除非必要的包元数据
-datas += copy_metadata("faster-whisper")
 datas += copy_metadata("pydantic")
 datas += copy_metadata("pydantic-settings")
 
@@ -110,9 +106,7 @@ hiddenimports = []
 hiddenimports += collect_submodules("video_sum_service")
 hiddenimports += collect_submodules("video_sum_core")
 hiddenimports += collect_submodules("video_sum_infra")
-hiddenimports += collect_submodules("faster_whisper")
 hiddenimports += collect_submodules("yt_dlp")
-hiddenimports += collect_submodules("av")
 # 时区数据 - Windows 上 zoneinfo 需要
 hiddenimports += ["tzdata"]
 
