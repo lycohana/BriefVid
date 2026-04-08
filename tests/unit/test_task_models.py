@@ -46,6 +46,16 @@ def test_service_settings_resolve_cuda_runtime() -> None:
     assert compute_type == "float16"
 
 
+def test_service_settings_normalize_gpu_alias_to_cuda() -> None:
+    settings = ServiceSettings(device_preference="gpu", compute_type="int8")
+
+    model, device, compute_type = settings.resolve_whisper_runtime(cuda_available=True)
+
+    assert settings.device_preference == "cuda"
+    assert device == "cuda"
+    assert compute_type == "int8_float16"
+
+
 def test_service_settings_default_to_managed_user_data_dir() -> None:
     settings = ServiceSettings()
 

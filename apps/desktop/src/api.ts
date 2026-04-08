@@ -10,6 +10,12 @@ import type {
   VideoAssetSummary,
 } from "./types";
 
+export type UpdateSettingsResponse = {
+  saved: boolean;
+  settings: ServiceSettings;
+  message: string;
+};
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -47,7 +53,7 @@ export const api = {
     return fetchJson<ServiceSettings>("/api/v1/settings");
   },
   updateSettings(payload: Partial<ServiceSettings>) {
-    return fetchJson<ServiceSettings>("/api/v1/settings", {
+    return fetchJson<UpdateSettingsResponse>("/api/v1/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

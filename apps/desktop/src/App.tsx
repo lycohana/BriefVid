@@ -49,8 +49,55 @@ type UpdateState = {
 
 type LibraryFilter = "all" | "completed" | "running" | "with-result";
 type MetricTone = "default" | "accent" | "success" | "info";
+type DevicePreference = "auto" | "cpu" | "cuda";
+type SelectOption = { value: string; label: string };
 
 const emptySnapshot: Snapshot = { serviceOnline: false, systemInfo: null, environment: null, settings: null, videos: [], error: "" };
+const devicePreferenceOptions: SelectOption[] = [
+  { value: "auto", label: "自动选择" },
+  { value: "cuda", label: "GPU (CUDA)" },
+  { value: "cpu", label: "CPU" },
+];
+
+function normalizeDevicePreference(value?: string | null): DevicePreference {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "gpu") {
+    return "cuda";
+  }
+  if (normalized === "auto" || normalized === "cuda" || normalized === "cpu") {
+    return normalized;
+  }
+  return "cpu";
+}
+
+function devicePreferenceLabel(value?: string | null): string {
+  const normalized = normalizeDevicePreference(value);
+  if (normalized === "cuda") {
+    return "GPU (CUDA)";
+  }
+  if (normalized === "auto") {
+    return "自动选择";
+  }
+  return "CPU";
+}
+
+function toUpdateState(info: UpdateInfo): UpdateState {
+  return {
+    status: info.status,
+    version: info.version,
+    releaseDate: info.releaseDate,
+    releaseNotes: info.releaseNotes,
+    downloadProgress: info.downloadProgress,
+    errorMessage: info.errorMessage,
+  };
+}
+
+function getUpdateDialogSignal(update: Pick<UpdateState, "status" | "version">): string | null {
+  if (update.status !== "available" && update.status !== "downloaded") {
+    return null;
+  }
+  return `${update.status}:${update.version || "unknown"}`;
+}
 
 export function App() {
   const location = useLocation();
@@ -74,6 +121,8 @@ export function App() {
     downloadProgress: 0,
     errorMessage: null,
   });
+  const dismissedUpdateDialogSignalRef = useRef<string | null>(null);
+  const lastAutoOpenedUpdateDialogSignalRef = useRef<string | null>(null);
 
   useEffect(() => {
     let backendCleanup: (() => void) | undefined;
@@ -90,32 +139,13 @@ export function App() {
       if (disposed) return;
       setDesktop({ version, backend, logPath });
       if (currentUpdateStatus) {
-        setUpdateState({
-          status: currentUpdateStatus.status,
-          version: currentUpdateStatus.version,
-          releaseDate: currentUpdateStatus.releaseDate,
-          releaseNotes: currentUpdateStatus.releaseNotes,
-          downloadProgress: currentUpdateStatus.downloadProgress,
-          errorMessage: currentUpdateStatus.errorMessage,
-        });
+        setUpdateState(toUpdateState(currentUpdateStatus));
       }
       backendCleanup = window.desktop.backend.onStatus((status) => setDesktop((current) => ({ ...current, backend: status })));
       
       // 监听更新状态
       updateCleanup = window.desktop.update?.onStatus((status) => {
-        setUpdateState({
-          status: status.status,
-          version: status.version,
-          releaseDate: status.releaseDate,
-          releaseNotes: status.releaseNotes,
-          downloadProgress: status.downloadProgress,
-          errorMessage: status.errorMessage,
-        });
-        
-        // 当有可用更新时自动打开对话框
-        if (status.status === "available" || status.status === "downloaded") {
-          setUpdateDialogOpen(true);
-        }
+        setUpdateState(toUpdateState(status));
       });
     }
     void bootstrap();
@@ -153,6 +183,40 @@ export function App() {
       window.clearInterval(timer);
     };
   }, [refreshSeed]);
+
+  useEffect(() => {
+    const signal = getUpdateDialogSignal(updateState);
+    if (!signal) {
+      lastAutoOpenedUpdateDialogSignalRef.current = null;
+      return;
+    }
+    if (updateDialogOpen) {
+      lastAutoOpenedUpdateDialogSignalRef.current = signal;
+      return;
+    }
+    if (dismissedUpdateDialogSignalRef.current === signal) {
+      return;
+    }
+    if (lastAutoOpenedUpdateDialogSignalRef.current === signal) {
+      return;
+    }
+    lastAutoOpenedUpdateDialogSignalRef.current = signal;
+    setUpdateDialogOpen(true);
+  }, [updateDialogOpen, updateState.status, updateState.version]);
+
+  function openUpdateDialog() {
+    const signal = getUpdateDialogSignal(updateState);
+    if (signal) {
+      dismissedUpdateDialogSignalRef.current = null;
+      lastAutoOpenedUpdateDialogSignalRef.current = signal;
+    }
+    setUpdateDialogOpen(true);
+  }
+
+  function closeUpdateDialog() {
+    dismissedUpdateDialogSignalRef.current = getUpdateDialogSignal(updateState);
+    setUpdateDialogOpen(false);
+  }
 
   const latestVideo = useMemo(() => {
     return [...snapshot.videos].sort(
@@ -196,13 +260,9 @@ export function App() {
   }, [snapshot.videos]);
 
   const runtimeDeviceLabel = useMemo(() => {
-    const rawDevice = (
-      snapshot.environment?.recommendedDevice
-      || snapshot.settings?.device_preference
-      || ""
-    ).toLowerCase();
+    const requestedDevice = normalizeDevicePreference(snapshot.settings?.device_preference);
 
-    if (snapshot.environment?.cudaAvailable || rawDevice.includes("cuda") || rawDevice.includes("gpu")) {
+    if (snapshot.environment?.cudaAvailable || requestedDevice === "cuda") {
       return "GPU";
     }
     return "CPU";
@@ -362,7 +422,18 @@ export function App() {
                 )}
               />
               <Route path="/videos/:videoId" element={<VideoDetailPage onRefresh={() => setRefreshSeed((value) => value + 1)} />} />
-              <Route path="/settings" element={<SettingsPage desktop={desktop} onRefresh={() => setRefreshSeed((value) => value + 1)} snapshot={snapshot} />} />
+              <Route
+                path="/settings"
+                element={(
+                  <SettingsPage
+                    desktop={desktop}
+                    onOpenUpdateDialog={openUpdateDialog}
+                    onRefresh={() => setRefreshSeed((value) => value + 1)}
+                    snapshot={snapshot}
+                    updateInfo={updateState}
+                  />
+                )}
+              />
             </Routes>
           )}
         </div>
@@ -372,18 +443,11 @@ export function App() {
         isOpen={updateDialogOpen}
         updateInfo={updateState as UpdateInfo}
         currentVersion={desktop.version}
-        onClose={() => setUpdateDialogOpen(false)}
+        onClose={closeUpdateDialog}
         onCheck={async () => {
           if (window.desktop?.update) {
             const result = await window.desktop.update.check();
-            setUpdateState({
-              status: result.status,
-              version: result.version,
-              releaseDate: result.releaseDate,
-              releaseNotes: result.releaseNotes,
-              downloadProgress: result.downloadProgress,
-              errorMessage: result.errorMessage,
-            });
+            setUpdateState(toUpdateState(result));
           }
         }}
         onDownload={async () => {
@@ -904,7 +968,19 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   );
 }
 
-function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; desktop: DesktopState; onRefresh(): void }) {
+function SettingsPage({
+  snapshot,
+  desktop,
+  onRefresh,
+  updateInfo,
+  onOpenUpdateDialog,
+}: {
+  snapshot: Snapshot;
+  desktop: DesktopState;
+  onRefresh(): void;
+  updateInfo: UpdateState;
+  onOpenUpdateDialog(): void;
+}) {
   const [form, setForm] = useState<ServiceSettings | null>(snapshot.settings);
   const [environment, setEnvironment] = useState<EnvironmentInfo | null>(snapshot.environment);
   const [saveStatus, setSaveStatus] = useState("");
@@ -998,9 +1074,14 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
     event.preventDefault();
     if (!form) return;
     try {
-      await api.updateSettings(form);
-      setSaveStatus("设置已保存");
-      setEnvironment(await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true }));
+      const response = await api.updateSettings({
+        ...form,
+        device_preference: normalizeDevicePreference(form.device_preference),
+      });
+      const nextSettings = response.settings;
+      setForm(nextSettings);
+      setSaveStatus(response.message || "设置已保存");
+      setEnvironment(await api.getEnvironment({ runtimeChannel: nextSettings.runtime_channel, refresh: true }));
       onRefresh();
     } catch (error) {
       setSaveStatus(error instanceof Error ? error.message : "保存设置失败");
@@ -1032,6 +1113,12 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
           </div>
           <div className="env-summary-grid">
             <Metric label="推荐设备" value={environment?.recommendedDevice || "-"} tone="accent" />
+            <Metric label="请求设备" value={devicePreferenceLabel(form.device_preference)} tone="info" />
+            <Metric
+              label="生效设备"
+              value={devicePreferenceLabel(form.whisper_device)}
+              tone={normalizeDevicePreference(form.whisper_device) === "cuda" ? "success" : "default"}
+            />
             <Metric label="推荐模型" value={environment?.recommendedModel || "-"} />
             <Metric label="GPU 状态" value={environment?.cudaAvailable ? "已启用" : "未启用"} tone={environment?.cudaAvailable ? "success" : "default"} />
             <Metric label="GPU 名称" value={environment?.gpuName || "未检测到"} />
@@ -1234,7 +1321,12 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
 
           <section className="settings-subsection">
             <h3>模型与摘要</h3>
-            <Field label="推理设备" value={form.device_preference} onChange={(value) => setForm({ ...form, device_preference: value })} />
+            <SelectField
+              label="推理设备"
+              value={normalizeDevicePreference(form.device_preference)}
+              options={devicePreferenceOptions}
+              onChange={(value) => setForm({ ...form, device_preference: value })}
+            />
             <Field label="固定模型" value={form.fixed_model} onChange={(value) => setForm({ ...form, fixed_model: value })} />
             <Field label="LLM Base URL" value={form.llm_base_url} onChange={(value) => setForm({ ...form, llm_base_url: value })} />
             <Field label="LLM 模型" value={form.llm_model} onChange={(value) => setForm({ ...form, llm_model: value })} />
@@ -1363,6 +1455,7 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
                 if (result) {
                   if (result.status === "available") {
                     setUpdateStatus(`发现新版本：v${result.version}`);
+                    onOpenUpdateDialog();
                   } else if (result.status === "not-available") {
                     setUpdateStatus("已是最新版本");
                   } else if (result.status === "error") {
@@ -1389,6 +1482,11 @@ function SettingsPage({ snapshot, desktop, onRefresh }: { snapshot: Snapshot; de
           >
             清除状态
           </button>
+          {(updateInfo.status === "available" || updateInfo.status === "downloaded" || updateInfo.status === "downloading") ? (
+            <button className="secondary-button" type="button" onClick={onOpenUpdateDialog}>
+              打开更新弹窗
+            </button>
+          ) : null}
         </div>
         <br></br>
         {updateStatus ? <div className="action-status">{updateStatus}</div> : null}
@@ -1402,6 +1500,31 @@ function Field({ label, value, onChange, type = "text" }: { label: string; value
     <label className="input-row">
       <span className="input-label">{label}</span>
       <input className="input-field" type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: SelectOption[];
+  onChange(value: string): void;
+}) {
+  return (
+    <label className="input-row">
+      <span className="input-label">{label}</span>
+      <select className="select-field" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

@@ -1,5 +1,5 @@
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from video_sum_infra.runtime import (
@@ -57,6 +57,22 @@ LEGACY_SUMMARY_USER_PROMPT_TEMPLATE = (
     "要求：\n1. bulletPoints 返回数组\n2. chapters 返回数组，每项包含 title、start、summary\n3. 输出必须是 JSON"
 )
 
+DEVICE_PREFERENCE_ALIASES = {
+    "auto": "auto",
+    "automatic": "auto",
+    "default": "auto",
+    "cpu": "cpu",
+    "cuda": "cuda",
+    "gpu": "cuda",
+}
+
+
+def normalize_device_preference(value: str | None, default: str = "cpu") -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    return DEVICE_PREFERENCE_ALIASES.get(normalized, default)
+
 
 class ServiceSettings(BaseSettings):
     host: str = "127.0.0.1"
@@ -97,6 +113,11 @@ class ServiceSettings(BaseSettings):
         extra="ignore",
     )
 
+    @field_validator("device_preference", mode="before")
+    @classmethod
+    def _normalize_device_preference(cls, value: str | None) -> str:
+        return normalize_device_preference(value)
+
     def resolve_whisper_runtime(
         self,
         cuda_available: bool,
@@ -106,11 +127,13 @@ class ServiceSettings(BaseSettings):
         else:
             model = self.fixed_model or self.whisper_model or "tiny"
 
-        if self.device_preference == "auto":
+        device_preference = normalize_device_preference(self.device_preference)
+
+        if device_preference == "auto":
             device = "cuda" if cuda_available else "cpu"
-        elif self.device_preference == "cuda" and cuda_available:
+        elif device_preference == "cuda" and cuda_available:
             device = "cuda"
-        elif self.device_preference == "cuda" and not cuda_available:
+        elif device_preference == "cuda" and not cuda_available:
             device = "cpu"
         else:
             device = "cpu"
