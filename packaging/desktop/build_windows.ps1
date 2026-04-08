@@ -39,11 +39,20 @@ try {
         throw "Icon generator script was not found: $iconScript"
     }
     Write-Host "Ensuring Pillow is available for icon generation..."
-    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-    $PSNativeCommandUseErrorActionPreference = $false
-    & $python312 -c "from PIL import Image" 2>$null
-    $pillowAvailable = ($LASTEXITCODE -eq 0)
-    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    $probeErrorPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $probeProcess = Start-Process `
+            -FilePath $python312 `
+            -ArgumentList '-c "from PIL import Image"' `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardError $probeErrorPath
+        $pillowAvailable = ($probeProcess.ExitCode -eq 0)
+    }
+    finally {
+        Remove-Item $probeErrorPath -Force -ErrorAction SilentlyContinue
+    }
     if (-not $pillowAvailable) {
         Write-Host "Pillow is missing; installing Pillow into the selected Python 3.12 environment..."
         & $python312 -m pip install --disable-pip-version-check Pillow
