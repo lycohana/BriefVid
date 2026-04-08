@@ -15,6 +15,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  detect-windows-package-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.detect.outputs.should_run }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Detect packaging-related changes
+        id: detect
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          release_bump=""
+          if [ "${EVENT_NAME}" = "push" ]; then
+            detect_output="$(mktemp)"
+            python scripts/detect_bump.py --github-output "${detect_output}"
+            release_bump="$(grep '^bump=' "${detect_output}" | cut -d= -f2-)"
+            rm -f "${detect_output}"
+            echo "Detected release bump: ${release_bump:-none}"
+          fi
+
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_BASE_SHA}" ]; then
+            base_ref="${PR_BASE_SHA}"
+          elif [ -n "${PUSH_BEFORE_SHA}" ] && [ "${PUSH_BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+            base_ref="${PUSH_BEFORE_SHA}"
+          else
+            base_ref="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+          echo "Comparing changed files from ${base_ref} to ${CURRENT_SHA}"
+
+          changed_files="$(git diff --name-only "${base_ref}" "${CURRENT_SHA}")"
+          printf '%s\n' "${changed_files}"
+
+          should_run="false"
+          if printf '%s\n' "${changed_files}" | grep -Eq '^(apps/desktop/|packaging/|\.github/workflows/|scripts/(versioning|bump_version)\.py$|VERSION$|pyproject\.toml$|package\.json$|apps/service/pyproject\.toml$|packages/core/pyproject\.toml$|packages/infra/pyproject\.toml$)'; then
+            should_run="true"
+          fi
+
+          if [ "${EVENT_NAME}" = "push" ] && [ -n "${release_bump}" ]; then
+            echo "Release workflow will validate the Windows package for this push; skip duplicate CI packaging check."
+            should_run="false"
+          fi
+
+          echo "should_run=${should_run}" >> "$GITHUB_OUTPUT"
+          echo "Packaging validation needed: ${should_run}"
+
   validate:
     runs-on: ubuntu-latest
 
@@ -50,3 +110,49 @@ jobs:
 
       - name: Build desktop app
         run: npm run build
+
+  validate-windows-package:
+    needs: detect-windows-package-check
+    if: ${{ needs.detect-windows-package-check.outputs.should_run == 'true' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install uv
+        run: python -m pip install --upgrade pip uv
+
+      - name: Verify version files are synced
+        run: python scripts/bump_version.py --check
+
+      - name: Install desktop dependencies
+        run: npm ci --prefix apps/desktop
+
+      - name: Set up FFmpeg
+        id: setup-ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+          architecture: x64
+
+      - name: Build Windows package for validation
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_PLATFORM: "windows"
+          VIDEO_SUM_FFMPEG_DIR: ${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}
+        run: npm run package:win

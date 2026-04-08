@@ -419,6 +419,8 @@ python -m pytest -q
   - `feat*!:`、`fix*!:` 这类同时带 `*` 和 `!` 的写法也支持，仍按 `major` 处理
   - 不带 `*` / `!` 的 `feat:`、`fix:`、`perf:`、`refactor:` 默认不发版
   - `docs:`、`chore:`、`ci:` 等默认不发版
+- 对 `apps/desktop`、`packaging`、相关版本文件或 CI/build 配置的改动，`CI` workflow 会额外在 Windows runner 上直接执行一次 `npm run package:win` 做打包预检
+- 这个 Windows 打包预检只校验原有打包链路，不会创建预览版，也不会上传 GitHub Release
 - 每次检测到版本更新时，都会在同一个 workflow 里构建 Windows 安装程序并创建 GitHub Release
 - 自动发版前会先在 GitHub Actions 的 Windows runner 上真实执行一次 `npm run package:win`
 - 只有 Windows 打包预检通过，才会提交版本号、创建 tag，并把构建好的 `Setup.exe` 安装包上传到该版本的 GitHub Release

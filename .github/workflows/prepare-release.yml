@@ -83,7 +83,6 @@ jobs:
         with:
           ffmpeg-version: release
           architecture: x64
-          linking-type: static
 
       - name: Prepare electron-builder cache
         shell: pwsh
