@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export function TitleBar() {
+export function TitleBar({ darkMode, onToggleTheme }: { darkMode: boolean; onToggleTheme(): void }) {
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -43,6 +43,24 @@ export function TitleBar() {
       </div>
       <div className="title-bar-drag-region" />
       <div className="title-bar-controls">
+        <button
+          className="title-bar-button"
+          type="button"
+          onClick={onToggleTheme}
+          aria-label={darkMode ? "切换到浅色模式" : "切换到深色模式"}
+          title={darkMode ? "浅色模式" : "深色模式"}
+        >
+          {darkMode ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2.5v2.25M12 19.25v2.25M4.75 12H2.5M21.5 12h-2.25M5.9 5.9 4.3 4.3M19.7 19.7l-1.6-1.6M18.1 5.9l1.6-1.6M4.3 19.7l1.6-1.6" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 15.5A8.5 8.5 0 1 1 12.5 4a6.5 6.5 0 0 0 7.5 11.5Z" />
+            </svg>
+          )}
+        </button>
         <button
           className="title-bar-button"
           type="button"

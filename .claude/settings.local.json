@@ -6,7 +6,16 @@
       "Bash(\"C:\\\\ProgramData\\\\chocolatey\\\\bin\\\\upx.exe\" --version)",
       "Bash(cd \"C:\\\\Users\\\\lycohana\\\\Desktop\\\\code\\\\bilibili_sum\" && \"build\\\\pyinstaller\\\\build-venv\\\\Scripts\\\\python.exe\" -c \"\nimport subprocess\nfor candidate in ['upx', 'upx3', r'C:\\\\ProgramData\\\\chocolatey\\\\bin\\\\upx.exe']:\n    try:\n        result = subprocess.run\\([candidate, '--version'], capture_output=True, timeout=5\\)\n        if result.returncode == 0:\n            print\\(f'UPX found: {candidate}'\\)\n            break\n    except \\(FileNotFoundError, subprocess.TimeoutExpired\\):\n        print\\(f'{candidate}: not found'\\)\n\")",
       "Bash(ls -la \"C:\\\\Users\\\\lycohana\\\\Desktop\\\\code\\\\bilibili_sum\\\\.venv\\\\Scripts\\\\\" 2>/dev/null | grep -i python || echo \"目录不存在或无 Python 文件\")",
-      "Bash(echo $BRIEFVID_DEV_PYTHON)"
+      "Bash(echo $BRIEFVID_DEV_PYTHON)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "Bash(cat apps/desktop/pyi-config/config.py 2>/dev/null || cat pyproject.toml 2>/dev/null || find . -name \"config*\" -type f | head -10)",
+      "Bash(cd apps/desktop && npm run build)",
+      "Bash(cd apps/desktop && npm run build 2>&1)",
+      "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop && npm run build 2>&1)",
+      "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop/src && sed -i 's/\"/\"/g App.tsx && sed -i 's/\"/\"/g App.tsx)",
+      "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop/src && python3 -c \"with open\\('App.tsx','rb'\\) as f: c=f.read\\(\\); c=c.replace\\(b'\\\\xe2\\\\x80\\\\x9c',b'\\\\\"'\\).replace\\(b'\\\\xe2\\\\x80\\\\x9d',b'\\\\\"'\\); open\\('App.tsx','wb'\\).write\\(c\\)\")"
     ]
   }
 }

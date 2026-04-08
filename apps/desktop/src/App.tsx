@@ -110,7 +110,20 @@ export function App() {
   const [submitStatus, setSubmitStatus] = useState("");
   const [probePreview, setProbePreview] = useState<VideoAssetSummary | null>(null);
   const [refreshSeed, setRefreshSeed] = useState(0);
-  
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "dark") {
+      return true;
+    }
+    if (savedTheme === "light") {
+      return false;
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
   // 更新状态
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>({
@@ -123,6 +136,11 @@ export function App() {
   });
   const dismissedUpdateDialogSignalRef = useRef<string | null>(null);
   const lastAutoOpenedUpdateDialogSignalRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     let backendCleanup: (() => void) | undefined;
@@ -294,6 +312,12 @@ export function App() {
       title: "运行配置、环境检测与日志",
       description: "围绕本地推理环境、模型配置与桌面端服务控制，统一管理 BriefVid 的运行能力。",
     }
+    : location.pathname.startsWith("/library")
+      ? {
+        eyebrow: "视频库",
+        title: "视频资产与摘要结果",
+        description: "集中管理已抓取的视频、摘要结果与当前处理状态。",
+      }
     : location.pathname.startsWith("/videos/")
       ? {
         eyebrow: "视频详情",
@@ -305,12 +329,13 @@ export function App() {
         title: "懒得看视频？一键省流！",
         description: "把时间留给真正有质量的视频",
       };
+  const isSettingsRoute = location.pathname.startsWith("/settings");
+  const isLibraryRoute = location.pathname.startsWith("/library");
 
   return (
     <div className="app-shell">
-      <TitleBar />
+      <TitleBar darkMode={darkMode} onToggleTheme={() => setDarkMode((current) => !current)} />
       <aside className="sidebar">
-        <div className="nav-group-label">主导航</div>
         <nav className="nav">
           <Link className={`nav-item ${location.pathname === "/" ? "active" : ""}`} to="/">
             <span className="nav-icon" aria-hidden="true"><HomeIcon /></span>
@@ -319,30 +344,27 @@ export function App() {
               <small>工作台总览</small>
             </span>
           </Link>
-        </nav>
-
-        <div className="nav-group-label">管理</div>
-        <nav className="nav">
           <Link className={`nav-item ${location.pathname === "/library" ? "active" : ""}`} to="/library">
             <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
             <span className="nav-copy">
               <strong>视频库</strong>
-              <small>摘要与资产管理</small>
+              <small>资产管理</small>
             </span>
           </Link>
           <Link className={`nav-item ${location.pathname.startsWith("/settings") ? "active" : ""}`} to="/settings">
             <span className="nav-icon" aria-hidden="true"><SettingsIcon /></span>
             <span className="nav-copy">
               <strong>设置</strong>
-              <small>环境与运行控制</small>
+              <small>运行配置</small>
             </span>
           </Link>
         </nav>
 
+        <div className="nav-section-divider"></div>
+
         <section className="live-panel">
           <div className="panel-header panel-header-subtle">
             <h2>运行状态</h2>
-            <p></p>
           </div>
           <div className="status-stack">
             <SidebarStatusItem
@@ -350,22 +372,24 @@ export function App() {
               tone={snapshot.serviceOnline ? "success" : "default"}
               value={snapshot.serviceOnline ? "在线" : desktop.backend?.running ? "启动中" : "离线"}
             />
-            <SidebarStatusItem label="最近任务" value={latestVideo?.title ?? "暂无任务"} />
+            <SidebarStatusItem label="设备" value={runtimeDeviceLabel} />
             <SidebarStatusItem label="版本" value={desktop.version} />
-            <SidebarStatusItem label="运行设备" value={runtimeDeviceLabel} />
           </div>
         </section>
+
       </aside>
 
       <main className="content">
-        <div className="content-frame">
-          <header className="page-header">
-            <div className="page-header-content">
-              <p className="eyebrow">{pageMeta.eyebrow}</p>
-              <h2>{pageMeta.title}</h2>
-              <p className="page-description">{pageMeta.description}</p>
-            </div>
-          </header>
+        <div className={`content-frame ${isSettingsRoute ? "content-frame-settings" : ""}`}>
+          {!isLibraryRoute ? (
+            <header className="page-header">
+              <div className="page-header-content">
+                <p className="eyebrow">{pageMeta.eyebrow}</p>
+                <h2>{pageMeta.title}</h2>
+                <p className="page-description">{pageMeta.description}</p>
+              </div>
+            </header>
+          ) : null}
 
           {snapshot.error && !snapshot.serviceOnline ? (
             <section className="grid-card empty-state-card">
@@ -517,19 +541,13 @@ function HomePage({
 }) {
   return (
     <section className="home-page">
-      {/* 欢迎区域 */}
-      <article className="grid-card welcome-card">
-        <div className="panel-header">
-          <p className="section-kicker">欢迎使用</p>
-          <h2>BriefVid 工作台</h2>
-          <p>输入视频链接，开始本地智能总结。</p>
-        </div>
-
-        <form className="task-form refined-task-form" onSubmit={onProbe}>
+      {/* 欢迎区域 - 简洁布局 */}
+      <div className="section">
+        <h2 className="section-title">开始总结</h2>
+        <form className="task-form" onSubmit={onProbe}>
           <div className="task-form-row">
-            <label className="input-row input-row-hero">
-              <span className="input-label">输入视频链接</span>
-              <div className="input-with-icon">
+            <label className="input-row input-row-hero" style={{ flex: 1 }}>
+              <div className="input-with-icon" style={{ flex: 1 }}>
                 <span className="input-icon" aria-hidden="true"><LinkIcon /></span>
                 <input
                   className="input-field input-field-hero"
@@ -543,11 +561,10 @@ function HomePage({
             </label>
             <button className="primary-button primary-button-hero" type="submit">开始总结</button>
           </div>
-
-          {submitStatus ? <div className="submit-status">{submitStatus}</div> : null}
+          {submitStatus && <div className="submit-status">{submitStatus}</div>}
         </form>
 
-        {probePreview ? (
+        {probePreview && (
           <article className="probe-preview">
             <img src={probePreview.cover_url} alt={probePreview.title} />
             <div className="probe-preview-copy">
@@ -556,15 +573,14 @@ function HomePage({
               <small>{formatDuration(probePreview.duration)} · {platformLabel(probePreview.platform)}</small>
             </div>
           </article>
-        ) : null}
-      </article>
+        )}
+      </div>
 
       {/* 最近视频 */}
-      <article className="grid-card recent-videos-card">
-        <div className="panel-header">
-          <p className="section-kicker">Recent Videos</p>
-          <h2>最近视频</h2>
-          <p>最新处理的 {recentVideos.length} 个视频</p>
+      <div className="section">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+          <h2 className="section-title" style={{ margin: 0 }}>最近视频</h2>
+          <span className="helper-chip">{recentVideos.length} 个视频</span>
         </div>
 
         {recentVideos.length > 0 ? (
@@ -576,7 +592,7 @@ function HomePage({
             还没有视频，先输入一个链接开始总结吧。
           </div>
         )}
-      </article>
+      </div>
     </section>
   );
 }
@@ -610,45 +626,44 @@ function LibraryPage({
     { id: "running", label: "处理中", count: libraryCounts.running },
     { id: "with-result", label: "有结果", count: libraryCounts.withResult },
   ];
+  const activeFilterLabel = filters.find((filter) => filter.id === activeFilter)?.label || "全部";
+  const summaryText = latestVideo
+    ? `最近更新：${latestVideo.title}`
+    : "输入链接后，视频会自动进入这里统一管理。";
 
   return (
     <section className="library-page">
-      {/* 视频库概览 */}
-      <article className="grid-card library-summary-card">
-        <div className="panel-header">
-          <p className="section-kicker">Overview</p>
-          <h2>视频库概览</h2>
-          <p>数据层级保持在第二优先级，用更轻的卡片承接状态概览。</p>
+      <section className="library-hero">
+        <div className="library-hero-copy">
+          <span className="library-kicker">Library</span>
+          <h2>视频资产与摘要结果</h2>
+          <p>{summaryText}</p>
         </div>
+        <div className="library-hero-status">
+          <span className={`helper-chip ${serviceOnline ? "status-success" : "status-pending"}`}>
+            {serviceOnline ? "服务在线" : "服务离线"}
+          </span>
+          <span className="helper-chip">{runtimeDeviceLabel}</span>
+          <span className="helper-chip">筛选：{activeFilterLabel}</span>
+        </div>
+      </section>
 
+      <section className="library-summary-panel">
         <div className="library-summary-grid">
           <Metric label="视频总数" value={String(libraryCounts.total)} detail="本地已收录资产" tone="accent" />
           <Metric label="已完成" value={String(libraryCounts.completed)} detail="可查看完整摘要" tone="success" />
           <Metric label="处理中" value={String(libraryCounts.running)} detail="正在进行转写或总结" tone="info" />
           <Metric label="有结果" value={String(libraryCounts.withResult)} detail="摘要结果已沉淀" />
         </div>
+      </section>
 
-        <div className="summary-insight">
-          <div className="summary-insight-copy">
-            <span>最近更新</span>
-            <strong>{latestVideo?.title ?? "等待首个视频进入视频库"}</strong>
-            <small>{latestVideo ? `${formatShortDate(latestVideo.updated_at)} · ${platformLabel(latestVideo.platform)}` : "输入链接后自动抓取并入库"}</small>
+      <section className="library-collection">
+        <div className="library-toolbar">
+          <div className="library-toolbar-copy">
+            <h3>视频库</h3>
+            <p>{filteredVideos.length} / {snapshot.videos.length} 个视频资产</p>
           </div>
-          <span className={`summary-insight-pill ${serviceOnline ? "is-online" : ""}`}>
-            {serviceOnline ? `服务在线 · ${runtimeDeviceLabel}` : "服务离线"}
-          </span>
-        </div>
-      </article>
-
-      <section className="grid-card library-grid-card">
-        <div className="library-section-head">
-          <div className="panel-header">
-            <p className="section-kicker">Video Library</p>
-            <h2>视频库</h2>
-            <p>{snapshot.videos.length} 个视频资产，支持搜索、状态筛选与详情跳转。</p>
-          </div>
-
-          <label className="search-field">
+          <label className="search-field library-search-field">
             <span className="search-icon" aria-hidden="true"><SearchIcon /></span>
             <input
               className="input-field input-field-search"
@@ -660,7 +675,7 @@ function LibraryPage({
           </label>
         </div>
 
-        <div className="filter-pill-row">
+        <div className="filter-pill-row library-filter-row">
           {filters.map((filter) => (
             <button
               key={filter.id}
@@ -674,11 +689,21 @@ function LibraryPage({
           ))}
         </div>
 
-        <div className="video-grid">
-          {filteredVideos.length ? filteredVideos.map((video) => <VideoCard key={video.video_id} video={video} />) : (
-            <div className="empty-placeholder">当前筛选条件下还没有视频，先输入一个链接开始总结。</div>
-          )}
-        </div>
+        {filteredVideos.length ? (
+          <div className="video-grid">
+            {filteredVideos.map((video) => <VideoCard key={video.video_id} video={video} />)}
+          </div>
+        ) : (
+          <div className="library-empty-state">
+            <div className="library-empty-visual" aria-hidden="true">
+              <SearchIcon width={34} height={34} />
+            </div>
+            <div className="library-empty-copy">
+              <h4>当前筛选条件下还没有视频</h4>
+              <p>可以调整筛选条件，或者回到首页输入一个视频链接开始生成摘要。</p>
+            </div>
+          </div>
+        )}
       </section>
     </section>
   );
@@ -699,6 +724,10 @@ function VideoCard({ video }: { video: VideoAssetSummary }) {
           <span className={`task-status ${badgeClass}`}>{taskStatusLabel(video.latest_status)}</span>
         </div>
         <h3>{video.title}</h3>
+        <div className="video-card-meta">
+          <span>{formatDateTime(video.updated_at)}</span>
+          <span>{video.latest_result ? "摘要已生成" : "等待结果"}</span>
+        </div>
       </div>
     </Link>
   );
@@ -835,33 +864,34 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               <p>当前视频的最新摘要、关键要点、时间轴和全文转写。</p>
             </div>
             {video.latest_result ? (
-              <div className="detail-result-stack">
-                <section className="grid-card result-card">
-                  <div className="card-header"><h3>摘要概览</h3></div>
-                  <div className="timeline"><p>{video.latest_result.overview}</p></div>
+              <div className="detail-result-sections">
+                <section className="result-section">
+                  <h3 className="result-section-title">摘要概览</h3>
+                  <p className="result-section-content">{video.latest_result.overview}</p>
                 </section>
-                <section className="grid-card result-card">
-                  <div className="card-header"><h3>关键要点</h3><span className="result-count">{video.latest_result.key_points.length} 条</span></div>
-                  <ul className="bullet-list">{video.latest_result.key_points.map((item) => <li key={item}>{item}</li>)}</ul>
+                <section className="result-section">
+                  <h3 className="result-section-title">关键要点 <span className="result-count">{video.latest_result.key_points.length} 条</span></h3>
+                  <ul className="key-points-list">
+                    {video.latest_result.key_points.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
                 </section>
-                <section className="grid-card result-card">
-                  <div className="card-header"><h3>时间轴</h3></div>
-                  <div className="timeline">
+                <section className="result-section">
+                  <h3 className="result-section-title">时间轴</h3>
+                  <div className="timeline-list">
                     {video.latest_result.timeline.map((item, index) => (
-                      <article className="timeline-item" key={`${item.title}-${index}`}>
-                        <div className="timeline-marker">{index + 1}</div>
-                        <div className="timeline-content">
+                      <article className="timeline-item-simple" key={`${item.title}-${index}`}>
+                        <div className="timeline-time-badge">{formatDuration(item.start ?? 0)}</div>
+                        <div className="timeline-content-simple">
                           <h4>{item.title || "章节"}</h4>
-                          <div className="timeline-meta"><span className="timeline-time">{formatDuration(item.start ?? 0)}</span></div>
                           <p>{item.summary || ""}</p>
                         </div>
                       </article>
                     ))}
                   </div>
                 </section>
-                <section className="grid-card transcript-card">
-                  <div className="card-header"><h3>转写全文</h3></div>
-                  <pre className="transcript">{video.latest_result.transcript_text}</pre>
+                <section className="result-section transcript-section">
+                  <h3 className="result-section-title">转写全文</h3>
+                  <pre className="transcript-full">{video.latest_result.transcript_text}</pre>
                 </section>
               </div>
             ) : <div className="empty-placeholder">当前还没有可展示的摘要结果。</div>}
@@ -913,7 +943,7 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                   </div>
                 </details>
               </div>
-            ) : <div className="empty-placeholder">点击“开始总结”后，这里会展示处理进度。</div>}
+            ) : <div className="empty-placeholder">点击"开始总结"后，这里会展示处理进度。</div>}
           </article>
 
           <article className="grid-card detail-side-card">
@@ -968,6 +998,116 @@ function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   );
 }
 
+type SettingsCategory = "overview" | "general" | "directories" | "model" | "llm" | "summary" | "advanced" | "environment" | "logs";
+type SettingsCategoryGroup = "workspace" | "system";
+
+const settingsCategories: Array<{
+  id: SettingsCategory;
+  label: string;
+  description: string;
+  group: SettingsCategoryGroup;
+  icon: JSX.Element;
+}> = [
+  { id: "overview", label: "概览", description: "集中查看服务状态、运行时与关键配置。", group: "workspace", icon: <OverviewIcon /> },
+  { id: "general", label: "基础设置", description: "管理服务监听地址、端口和基本接入信息。", group: "workspace", icon: <SettingsIcon /> },
+  { id: "directories", label: "目录设置", description: "统一整理数据、缓存和任务文件的落盘位置。", group: "workspace", icon: <FolderIcon /> },
+  { id: "model", label: "模型设置", description: "调整 Whisper 模型、推理设备和模型选择方式。", group: "workspace", icon: <CpuIcon /> },
+  { id: "llm", label: "LLM 设置", description: "配置云端大模型摘要能力与 API 接入参数。", group: "workspace", icon: <RobotIcon /> },
+  { id: "summary", label: "摘要参数", description: "微调摘要模式、语言和切块策略。", group: "workspace", icon: <FileTextIcon /> },
+  { id: "advanced", label: "高级设置", description: "切换 CUDA 变体、运行时通道和缓存行为。", group: "system", icon: <SlidersIcon /> },
+  { id: "environment", label: "运行环境", description: "检查 Python、Torch、GPU 与 CUDA 就绪状态。", group: "system", icon: <MonitorIcon /> },
+  { id: "logs", label: "日志与控制", description: "查看服务日志并控制内置后端进程。", group: "system", icon: <TerminalIcon /> },
+];
+
+// SVG Icons
+function OverviewIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function CpuIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+    </svg>
+  );
+}
+
+function RobotIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="10" rx="2" />
+      <circle cx="12" cy="5" r="2" />
+      <path d="M12 7v4" />
+      <line x1="8" y1="16" x2="8" y2="16" />
+      <line x1="16" y1="16" x2="16" y2="16" />
+    </svg>
+  );
+}
+
+function FileTextIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function SlidersIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="21" x2="4" y2="14" />
+      <line x1="4" y1="10" x2="4" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12" y2="3" />
+      <line x1="20" y1="21" x2="20" y2="16" />
+      <line x1="20" y1="12" x2="20" y2="3" />
+      <line x1="1" y1="14" x2="7" y2="14" />
+      <line x1="9" y1="8" x2="15" y2="8" />
+      <line x1="17" y1="16" x2="23" y2="16" />
+    </svg>
+  );
+}
+
+function MonitorIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
+}
+
 function SettingsPage({
   snapshot,
   desktop,
@@ -996,6 +1136,7 @@ function SettingsPage({
   const [serviceStatus, setServiceStatus] = useState("");
   const [updateStatus, setUpdateStatus] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("overview");
 
   useEffect(() => {
     setForm(snapshot.settings);
@@ -1039,6 +1180,10 @@ function SettingsPage({
   const serviceOnline = snapshot.serviceOnline;
   const effectiveLogPath = logPath || snapshot.systemInfo?.service?.log_file || desktop.logPath || "-";
   const targetRuntimeChannel = `gpu-${form?.cuda_variant || "cu128"}`;
+  const activeCategoryMeta = settingsCategories.find((category) => category.id === activeCategory) || settingsCategories[0];
+  const workspaceCategories = settingsCategories.filter((category) => category.group === "workspace");
+  const systemCategories = settingsCategories.filter((category) => category.group === "system");
+  const llmReady = Boolean(form?.llm_enabled && form?.llm_api_key_configured);
   const cudaPhasePlan = [
     { threshold: 10, label: "准备 GPU 运行时目录" },
     { threshold: 26, label: "引导 pip 和基础安装能力" },
@@ -1099,399 +1244,779 @@ function SettingsPage({
   });
 
   return (
-    <section className="settings-grid">
-      <article className="grid-card settings-wide env-card">
-        <div className="panel-header">
-          <p className="section-kicker">Environment</p>
-          <h2>运行环境与 CUDA</h2>
-          <p>环境检测、推荐设备和 CUDA 配置保持在统一的浅色卡片体系中。</p>
+    <div className="settings-page-wrapper">
+      {/* 左侧设置分类导航 */}
+      <aside className="settings-nav">
+        <div className="settings-nav-header">
+          <span className="settings-nav-label-small">BriefVid</span>
+          <div className="settings-nav-brand-card">
+            <div className="settings-nav-brand-copy">
+              <span className="settings-nav-brand-kicker">设置</span>
+              <strong>管理应用与运行配置</strong>
+              <p>统一调整目录、模型、服务与环境状态，让常用设置保持清晰可读。</p>
+            </div>
+            <div className="settings-nav-brand-metrics">
+              <div className="settings-nav-metric">
+                <span>服务</span>
+                <strong>{serviceOnline ? "在线" : "离线"}</strong>
+              </div>
+              <div className="settings-nav-metric">
+                <span>设备</span>
+                <strong>{devicePreferenceLabel(form.whisper_device)}</strong>
+              </div>
+            </div>
+          </div>
         </div>
-        <section className="env-panel">
-          <div className="env-panel-head">
-            <span className="env-panel-kicker">Environment Snapshot</span>
-            <p>当前硬件、依赖版本和运行时建议一览。</p>
+        <div className="settings-nav-list">
+          <div className="settings-nav-group">
+            <span className="settings-nav-group-label">工作区</span>
+            <nav className="settings-nav-links">
+              {workspaceCategories.map((category) => (
+                <button
+                  key={category.id}
+                  className={`settings-nav-item ${activeCategory === category.id ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setActiveCategory(category.id)}
+                >
+                  <span className="settings-nav-icon">{category.icon}</span>
+                  <span className="settings-nav-copy">
+                    <span className="settings-nav-label">{category.label}</span>
+                    <span className="settings-nav-description">{category.description}</span>
+                  </span>
+                </button>
+              ))}
+            </nav>
           </div>
-          <div className="env-summary-grid">
-            <Metric label="推荐设备" value={environment?.recommendedDevice || "-"} tone="accent" />
-            <Metric label="请求设备" value={devicePreferenceLabel(form.device_preference)} tone="info" />
-            <Metric
-              label="生效设备"
-              value={devicePreferenceLabel(form.whisper_device)}
-              tone={normalizeDevicePreference(form.whisper_device) === "cuda" ? "success" : "default"}
-            />
-            <Metric label="推荐模型" value={environment?.recommendedModel || "-"} />
-            <Metric label="GPU 状态" value={environment?.cudaAvailable ? "已启用" : "未启用"} tone={environment?.cudaAvailable ? "success" : "default"} />
-            <Metric label="GPU 名称" value={environment?.gpuName || "未检测到"} />
-            <Metric label="Torch" value={environment?.torchInstalled ? environment?.torchVersion || "已安装" : "未安装"} />
-            <Metric label="yt-dlp" value={environment?.ytDlpVersion || "未安装"} />
-            <Metric label="faster-whisper" value={environment?.fasterWhisperVersion || "未安装"} />
-            <div className="metric-card">
-              <span className="metric-label">FFmpeg</span>
-              <div className="metric-value-row">
-                <strong className={`metric-value ${environment?.ffmpegLocation ? "text-success" : ""}`}>
-                  {environment?.ffmpegLocation ? "已安装" : "未安装"}
-                </strong>
-                {environment?.ffmpegLocation ? (
-                  <span className="ffmpeg-info-icon" title={environment.ffmpegLocation}>!</span>
-                ) : null}
-              </div>
+          <div className="settings-nav-group">
+            <span className="settings-nav-group-label">系统</span>
+            <nav className="settings-nav-links">
+              {systemCategories.map((category) => (
+                <button
+                  key={category.id}
+                  className={`settings-nav-item ${activeCategory === category.id ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setActiveCategory(category.id)}
+                >
+                  <span className="settings-nav-icon">{category.icon}</span>
+                  <span className="settings-nav-copy">
+                    <span className="settings-nav-label">{category.label}</span>
+                    <span className="settings-nav-description">{category.description}</span>
+                  </span>
+                </button>
+              ))}
+            </nav>
+          </div>
+        </div>
+        <div className="settings-nav-actions">
+          <button className="primary-button settings-save-btn" type="button" onClick={async (e) => { e.preventDefault(); await save(e as FormEvent); }}>
+            保存设置
+          </button>
+          <div className="settings-nav-summary">
+            <div className="settings-nav-summary-row">
+              <span>运行时</span>
+              <strong>{environment?.runtimeChannel || form.runtime_channel || "base"}</strong>
             </div>
-            <Metric label="Python" value={environment?.pythonVersion || "-"} />
-            <Metric label="运行时通道" value={environment?.runtimeChannel || form.runtime_channel || "base"} tone="info" />
-            <Metric label="运行时状态" value={environment?.runtimeReady === false ? "未就绪" : "已就绪"} tone={environment?.runtimeReady === false ? "default" : "success"} />
-            <Metric label="运行时解释器" value={environment?.runtimePython || "-"} />
+            <div className="settings-nav-summary-row">
+              <span>LLM</span>
+              <strong>{llmReady ? "已配置" : form.llm_enabled ? "待补全" : "关闭"}</strong>
+            </div>
           </div>
-        </section>
+          {saveStatus && <span className="settings-save-status">{saveStatus}</span>}
+        </div>
+      </aside>
 
-        <section className="cuda-control-panel">
-          <div className="cuda-control-copy">
-            <span className="env-panel-kicker">CUDA Control</span>
-            <h3>CUDA 目标版本</h3>
-            <p>选择目标运行时后，可重新检测环境或安装对应 CUDA 支持。</p>
-          </div>
-          <div className="cuda-install-shell">
-            <div className="cuda-insight-grid">
-              <div className="setting-row">
-                <span className="setting-label">目标运行时</span>
-                <span className="setting-value">{targetRuntimeChannel}</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">当前运行时</span>
-                <span className="setting-value">{environment?.runtimeChannel || form.runtime_channel || "base"}</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">运行时状态</span>
-                <span className="setting-value">{environment?.runtimeReady === false ? "未就绪" : "已就绪"}</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">目标解释器路径</span>
-                <span className="setting-value">{`${targetRuntimeChannel}\\python.exe`}</span>
-              </div>
+      {/* 右侧设置内容区域 */}
+      <main className="settings-content">
+        <div className="settings-content-scroll">
+          <header className="settings-page-hero">
+            <div className="settings-page-hero-copy">
+              <span className="settings-page-kicker">Settings</span>
+              <h1>{activeCategoryMeta.label}</h1>
+              <p>{activeCategoryMeta.description}</p>
             </div>
-          <div className="cuda-actions">
-            <label className="input-row cuda-picker">
-              <span className="input-label">CUDA 目标版本</span>
-              <select
-                className="select-field"
-                value={form.cuda_variant}
-                disabled={cudaInstalling}
-                onChange={(event) => setForm({ ...form, cuda_variant: event.target.value })}
-              >
-                <option value="cu128">CUDA 12.8</option>
-                <option value="cu126">CUDA 12.6</option>
-                <option value="cu124">CUDA 12.4</option>
-              </select>
-            </label>
-            <div className="settings-actions cuda-button-row">
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={cudaInstalling}
-                onClick={async () => {
-                  try {
-                    setCudaStatus("正在重新检测环境...");
-                    const nextEnvironment = await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true });
-                    setEnvironment(nextEnvironment);
-                    setCudaStatus("环境检测完成");
-                    onRefresh();
-                  } catch (error) {
-                    setCudaStatus(error instanceof Error ? error.message : "环境检测失败");
-                  }
-                }}
-              >
-                重新检测
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={cudaInstalling}
-                onClick={async () => {
-                  try {
-                    setCudaInstalling(true);
-                    setCudaStartedAt(Date.now());
-                    setCudaProgress(8);
-                    setCudaStage("准备 GPU 运行时目录");
-                    setCudaStatus("CUDA 安装已开始，正在准备运行时...");
-                    setCudaOutput("");
-                    setCudaDetail(
-                      `将为 ${targetRuntimeChannel} 安装 PyTorch CUDA 依赖，并把运行时切换到该通道。`
-                    );
-                    const result = await api.installCuda({ cuda_variant: form.cuda_variant });
-                    const nextRuntimeChannel = result.runtimeChannel || form.runtime_channel;
-                    setCudaInstalling(false);
-                    setCudaProgress(100);
-                    setCudaStage(result.restartRequired ? "CUDA 安装完成，等待重启切换运行时" : "CUDA 安装完成");
-                    setCudaStatus(
-                      result.restartRequired
-                        ? "CUDA 安装完成，请重启应用后切换到新的 GPU 运行时"
-                        : "CUDA 安装命令已执行"
-                    );
-                    setCudaOutput(result.stdoutTail || "");
-                    setCudaDetail(
-                      `安装目标：${result.cudaVariant || form.cuda_variant}，运行时通道：${nextRuntimeChannel}。`
-                    );
-                    setForm({ ...form, runtime_channel: nextRuntimeChannel, cuda_variant: result.cudaVariant || form.cuda_variant });
-                    setEnvironment(await api.getEnvironment({ runtimeChannel: nextRuntimeChannel, refresh: true }));
-                    onRefresh();
-                  } catch (error) {
-                    setCudaInstalling(false);
-                    setCudaStage("CUDA 安装失败");
-                    setCudaProgress((current) => (current > 0 ? current : 12));
-                    setCudaStatus(error instanceof Error ? error.message : "CUDA 安装失败");
-                    setCudaDetail(
-                      "安装在运行时依赖准备或 PyTorch CUDA 依赖下载阶段失败。请查看下方输出和服务日志。"
-                    );
-                  }
-                }}
-              >
-                {cudaInstalling ? "安装中..." : "安装 CUDA 支持"}
-              </button>
+            <div className="settings-page-hero-meta">
+              <span className={`settings-hero-chip ${serviceOnline ? "is-success" : "is-danger"}`}>
+                {serviceOnline ? "服务在线" : "服务离线"}
+              </span>
+              <span className="settings-hero-chip">
+                {environment?.runtimeChannel || form.runtime_channel || "base"}
+              </span>
+              <span className={`settings-hero-chip ${environment?.cudaAvailable ? "is-success" : ""}`}>
+                {environment?.cudaAvailable ? "CUDA Ready" : "CPU Only"}
+              </span>
+              <span className={`settings-hero-chip ${llmReady ? "is-success" : ""}`}>
+                {llmReady ? "LLM 已配置" : form.llm_enabled ? "LLM 待补全" : "LLM 关闭"}
+              </span>
             </div>
-          </div>
-          {(cudaInstalling || cudaProgress > 0 || cudaStatus) ? (
-            <div className="cuda-progress-card">
-              <div className="progress-bar-wrapper">
-                <div className="progress-bar-simple">
-                  <div
-                    className={`progress-fill-simple ${cudaStatus.includes("失败") ? "error" : cudaProgress >= 100 ? "success" : ""}`}
-                    style={{ width: `${Math.min(cudaProgress, 100)}%` }}
-                  />
+          </header>
+
+          {/* 概览 */}
+          {activeCategory === "overview" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>设置总览</h2>
+                <p>集中查看当前配置、运行状态和常用操作。</p>
+              </header>
+
+              <div className="settings-story-card">
+                <div className="settings-story-copy">
+                  <span className="settings-story-kicker">概览</span>
+                  <h3>当前配置与运行状态</h3>
+                  <p>
+                    这里优先展示运行时、模型、摘要模式和服务状态。需要排障时，可以直接切到环境检测或日志与控制。
+                  </p>
                 </div>
-                <div className="progress-info-simple">
-                  <span className="progress-percent-simple">{Math.round(Math.min(cudaProgress, 100))}%</span>
-                  <span className="progress-status-simple">{cudaStage || "等待开始"}</span>
+                <div className="settings-story-stats">
+                  <div className="settings-story-stat">
+                    <span>服务端口</span>
+                    <strong>{form.host}:{form.port}</strong>
+                  </div>
+                  <div className="settings-story-stat">
+                    <span>Whisper</span>
+                    <strong>{form.fixed_model}</strong>
+                  </div>
+                  <div className="settings-story-stat">
+                    <span>摘要模式</span>
+                    <strong>{form.summary_mode === "llm" ? "LLM 智能摘要" : "抽取式摘要"}</strong>
+                  </div>
                 </div>
               </div>
-              <div className="cuda-stage-list">
-                {cudaPhaseItems.map((phase) => (
-                  <div key={phase.label} className={`cuda-stage-item ${phase.state}`}>
-                    <span>{phase.label}</span>
-                    <strong>
-                      {phase.state === "done" ? "已完成" : phase.state === "active" ? "进行中" : "待执行"}
+
+              {/* 服务状态卡片 */}
+              <div className="overview-status-grid">
+                <div className="overview-status-card">
+                  <div className="overview-status-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 6v6l4 2" />
+                    </svg>
+                  </div>
+                  <div className="overview-status-info">
+                    <span className="overview-status-label">服务状态</span>
+                    <strong className={`overview-status-value ${serviceOnline ? "text-success" : "text-danger"}`}>
+                      {serviceOnline ? "运行中" : "已停止"}
                     </strong>
                   </div>
-                ))}
+                </div>
+                <div className="overview-status-card">
+                  <div className="overview-status-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="2" y="3" width="20" height="14" rx="2" />
+                      <line x1="8" y1="21" x2="16" y2="21" />
+                    </svg>
+                  </div>
+                  <div className="overview-status-info">
+                    <span className="overview-status-label">运行时</span>
+                    <strong className="overview-status-value">{environment?.runtimeChannel || form.runtime_channel || "base"}</strong>
+                  </div>
+                </div>
+                <div className="overview-status-card">
+                  <div className="overview-status-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                  </div>
+                  <div className="overview-status-info">
+                    <span className="overview-status-label">推理设备</span>
+                    <strong className="overview-status-value">{devicePreferenceLabel(form.whisper_device)}</strong>
+                  </div>
+                </div>
+                <div className="overview-status-card">
+                  <div className="overview-status-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M20.2 7.8l-7.7 7.7a4 4 0 0 1-5.7 0l-3-3a1 1 0 0 1 1.4-1.4l3 3a2 2 0 0 0 2.8 0l7.7-7.7a1 1 0 0 1 1.4 1.4z" />
+                    </svg>
+                  </div>
+                  <div className="overview-status-info">
+                    <span className="overview-status-label">LLM 摘要</span>
+                    <strong className={`overview-status-value ${form.llm_enabled ? "text-success" : ""}`}>
+                      {form.llm_enabled ? "已启用" : "已关闭"}
+                    </strong>
+                  </div>
+                </div>
               </div>
-              <p className="cuda-helper-text">
-                当前后端仍是同步安装接口，所以阶段进度是基于安装流程的可视化估计；最终结果以下方安装输出和重新检测结果为准。
-              </p>
-            </div>
-          ) : null}
-          {cudaStatus ? <div className="action-status">{cudaStatus}</div> : null}
-          {cudaDetail ? <div className="cuda-helper-text">{cudaDetail}</div> : null}
-          {cudaOutput ? (
-            <label className="input-row">
-              <span className="input-label">CUDA 安装输出</span>
-              <textarea className="textarea-field log-viewer" rows={12} readOnly value={cudaOutput}></textarea>
-            </label>
-          ) : null}
-          {environment?.runtimeError ? (
-            <label className="input-row">
-              <span className="input-label">运行时错误详情</span>
-              <textarea className="textarea-field log-viewer" rows={8} readOnly value={environment.runtimeError}></textarea>
-            </label>
-          ) : null}
-          {(cudaStatus.includes("完成") || cudaProgress >= 100) ? (
-            <div className="cuda-next-steps">
-              <strong>下一步建议</strong>
-              <span>1. 点击“重新检测”确认当前 GPU runtime 已就绪。</span>
-              <span>2. 确认“运行时通道”已经切到目标 GPU 通道。</span>
-              <span>3. 若提示需要重启，请重启桌面应用后再开始转写任务。</span>
-            </div>
-          ) : null}
-          </div>
-        </section>
-      </article>
 
-      <article className="grid-card settings-form-card">
-        <div className="panel-header">
-          <p className="section-kicker">Configuration</p>
-          <h2>运行配置</h2>
-          <p>编辑并保存后端配置，保持字段分组清晰、对齐统一。</p>
-        </div>
-        <form className="setting-form settings-sections" onSubmit={save}>
-          <section className="settings-subsection">
-            <h3>基础运行</h3>
-            <Field label="监听地址" value={form.host} onChange={(value) => setForm({ ...form, host: value })} />
-            <Field label="监听端口" value={String(form.port)} type="number" onChange={(value) => setForm({ ...form, port: Number(value) })} />
-            <Field label="数据目录" value={form.data_dir} onChange={(value) => setForm({ ...form, data_dir: value })} />
-            <Field label="缓存目录" value={form.cache_dir} onChange={(value) => setForm({ ...form, cache_dir: value })} />
-            <Field label="任务目录" value={form.tasks_dir} onChange={(value) => setForm({ ...form, tasks_dir: value })} />
-          </section>
+              {/* 环境信息 */}
+              <div className="overview-section">
+                <h3 className="overview-section-title">环境信息</h3>
+                <div className="overview-info-grid">
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">Python</span>
+                    <span className="overview-info-value">{environment?.pythonVersion || "-"}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">Torch</span>
+                    <span className={`overview-info-value ${environment?.torchInstalled ? "text-success" : ""}`}>
+                      {environment?.torchInstalled ? environment?.torchVersion || "已安装" : "未安装"}
+                    </span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">GPU</span>
+                    <span className={`overview-info-value ${environment?.cudaAvailable ? "text-success" : ""}`}>
+                      {environment?.cudaAvailable ? environment?.gpuName || "已就绪" : "未检测到"}
+                    </span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">yt-dlp</span>
+                    <span className="overview-info-value">{environment?.ytDlpVersion || "-"}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">faster-whisper</span>
+                    <span className="overview-info-value">{environment?.fasterWhisperVersion || "-"}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">FFmpeg</span>
+                    <span className={`overview-info-value ${environment?.ffmpegLocation ? "text-success" : ""}`}>
+                      {environment?.ffmpegLocation ? "已安装" : "未安装"}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-          <section className="settings-subsection">
-            <h3>模型与摘要</h3>
-            <SelectField
-              label="推理设备"
-              value={normalizeDevicePreference(form.device_preference)}
-              options={devicePreferenceOptions}
-              onChange={(value) => setForm({ ...form, device_preference: value })}
-            />
-            <Field label="固定模型" value={form.fixed_model} onChange={(value) => setForm({ ...form, fixed_model: value })} />
-            <Field label="LLM Base URL" value={form.llm_base_url} onChange={(value) => setForm({ ...form, llm_base_url: value })} />
-            <Field label="LLM 模型" value={form.llm_model} onChange={(value) => setForm({ ...form, llm_model: value })} />
-            <Field label="LLM API Key" value={form.llm_api_key} type="password" onChange={(value) => setForm({ ...form, llm_api_key: value })} />
-          </section>
+              {/* 版本信息 */}
+              <div className="overview-section">
+                <h3 className="overview-section-title">版本信息</h3>
+                <div className="overview-info-grid">
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">应用版本</span>
+                    <span className="overview-info-value">v{desktop.version}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">监听地址</span>
+                    <span className="overview-info-value">{form.host}:{form.port}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">语言</span>
+                    <span className="overview-info-value">{form.language === "zh" ? "中文" : form.language === "en" ? "English" : "日本語"}</span>
+                  </div>
+                  <div className="overview-info-item">
+                    <span className="overview-info-label">Whisper 模型</span>
+                    <span className="overview-info-value">{form.fixed_model}</span>
+                  </div>
+                </div>
+              </div>
 
-          <section className="settings-subsection settings-actions-section">
-            <div className="settings-actions">
-              <button className="primary-button" type="submit">保存设置</button>
-              {saveStatus ? <div className="action-status">{saveStatus}</div> : null}
-            </div>
-          </section>
-        </form>
-      </article>
+              {/* 快速操作 */}
+              <div className="overview-section">
+                <h3 className="overview-section-title">快速操作</h3>
+                <div className="overview-actions">
+                  <button
+                    className="tertiary-button"
+                    type="button"
+                    onClick={() => setActiveCategory("environment")}
+                  >
+                    环境设置
+                  </button>
+                  <button
+                    className="tertiary-button"
+                    type="button"
+                    onClick={() => setActiveCategory("logs")}
+                  >
+                    查看日志
+                  </button>
+                  <button
+                    className="tertiary-button"
+                    type="button"
+                    onClick={() => setActiveCategory("model")}
+                  >
+                    模型配置
+                  </button>
+                  <button
+                    className="tertiary-button"
+                    type="button"
+                    onClick={() => setActiveCategory("llm")}
+                  >
+                    LLM 设置
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
 
-      <article className="grid-card">
-        <div className="panel-header">
-          <p className="section-kicker">Service Info</p>
-          <h2>服务信息</h2>
-          <p>系统运行详情与日志路径。</p>
-        </div>
-        <div className="setting-list">
-          <div className="setting-row"><span className="setting-label">服务名</span><span className="setting-value">{snapshot.systemInfo?.application?.name || "-"}</span></div>
-          <div className="setting-row"><span className="setting-label">版本</span><span className="setting-value">{snapshot.systemInfo?.application?.version || "-"}</span></div>
-          <div className="setting-row"><span className="setting-label">服务状态</span><span className="setting-value">{snapshot.serviceOnline ? "在线" : "离线"}</span></div>
-          <div className="setting-row"><span className="setting-label">日志文件</span><span className="setting-value">{snapshot.systemInfo?.service?.log_file || desktop.logPath || "-"}</span></div>
-        </div>
-      </article>
+          {/* 基础设置 */}
+          {activeCategory === "general" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>基础设置</h2>
+                <p>服务监听地址和端口配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">监听地址</span>
+                  <input className="settings-input-field" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
+                  <span className="settings-input-caption">服务绑定的 IP 地址，通常为 127.0.0.1</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">监听端口</span>
+                  <input className="settings-input-field" type="number" value={form.port} onChange={(e) => setForm({ ...form, port: parseInt(e.target.value) || 3838 })} />
+                  <span className="settings-input-caption">服务端口号，默认 3838</span>
+                </label>
+              </div>
+            </section>
+          )}
 
-      <article className="grid-card settings-wide">
-        <div className="panel-header">
-          <p className="section-kicker">Logs & Control</p>
-          <h2>日志与控制</h2>
-          <p>查看后端日志，并直接控制当前内置后端。</p>
-        </div>
-        <div className="control-status-row">
-          <span className={`helper-chip ${serviceOnline ? "status-success" : "status-failed"}`}>{serviceOnline ? "服务在线" : "服务离线"}</span>
-          <span className={`helper-chip ${backendRunning ? (backendReady ? "status-success" : "status-running") : "status-pending"}`}>
-            {backendRunning ? (backendReady ? "内置后端运行中" : "内置后端启动中") : "内置后端未运行"}
-          </span>
-          {desktop.backend?.pid ? <span className="helper-chip">PID {desktop.backend.pid}</span> : null}
-        </div>
-        <div className="desktop-actions">
-          <button className="secondary-button" type="button" onClick={() => void refreshLogs()}>刷新日志</button>
-          <button
-            className={backendRunning ? "secondary-button danger-button" : "primary-button"}
-            type="button"
-            onClick={async () => {
-              if (backendRunning) {
-                await window.desktop?.backend.stop();
-                setServiceStatus("内置后端已停止");
-              } else {
-                await window.desktop?.backend.start();
-                setServiceStatus("已请求启动内置后端");
-              }
-              onRefresh();
-              await refreshLogs();
-            }}
-          >
-            {backendRunning ? "停止内置后端" : "启动内置后端"}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={async () => {
-              await window.desktop?.shell.openPath(effectiveLogPath);
-            }}
-          >
-            打开日志文件
-          </button>
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            disabled={!serviceOnline}
-            onClick={async () => {
-              await api.shutdownService();
-              setServiceStatus("已向服务发送关闭请求");
-              onRefresh();
-              await refreshLogs();
-            }}
-          >
-            强制关闭服务
-          </button>
-        </div>
-        {desktop.backend?.lastError ? <div className="action-status">{desktop.backend.lastError}</div> : null}
-        {serviceStatus ? <div className="action-status">{serviceStatus}</div> : null}
-        <label className="input-row">
-          <span className="input-label">当前日志文件</span>
-          <input className="input-field" value={effectiveLogPath} readOnly />
-        </label>
-        <label className="input-row">
-          <span className="input-label">最近日志</span>
-          <textarea className="textarea-field log-viewer" rows={16} readOnly value={logOutput}></textarea>
-        </label>
-      </article>
+          {/* 目录设置 */}
+          {activeCategory === "directories" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>目录设置</h2>
+                <p>数据存储和缓存目录配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">数据目录</span>
+                  <input className="settings-input-field" value={String(form.data_dir)} onChange={(e) => setForm({ ...form, data_dir: e.target.value })} />
+                  <span className="settings-input-caption">存储视频摘要和元数据的目录</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">缓存目录</span>
+                  <input className="settings-input-field" value={String(form.cache_dir)} onChange={(e) => setForm({ ...form, cache_dir: e.target.value })} />
+                  <span className="settings-input-caption">临时缓存文件存储位置</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">任务目录</span>
+                  <input className="settings-input-field" value={String(form.tasks_dir)} onChange={(e) => setForm({ ...form, tasks_dir: e.target.value })} />
+                  <span className="settings-input-caption">任务历史记录存储目录</span>
+                </label>
+              </div>
+            </section>
+          )}
 
-      <article className="grid-card settings-wide">
-        <div className="panel-header">
-          <p className="section-kicker">About & Updates</p>
-          <h2>关于与更新</h2>
-          <p>检查新版本并查看更新日志。</p>
+          {/* 模型设置 */}
+          {activeCategory === "model" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>模型设置</h2>
+                <p>Whisper 模型和推理设备配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">推理设备</span>
+                  <select className="settings-select-field" value={normalizeDevicePreference(form.device_preference)} onChange={(e) => setForm({ ...form, device_preference: e.target.value })}>
+                    <option value="auto">自动选择</option>
+                    <option value="cuda">GPU (CUDA)</option>
+                    <option value="cpu">CPU</option>
+                  </select>
+                  <span className="settings-input-caption">选择模型推理使用的设备，GPU 需要 CUDA 支持</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">模型模式</span>
+                  <select className="settings-select-field" value={form.model_mode} onChange={(e) => setForm({ ...form, model_mode: e.target.value })}>
+                    <option value="fixed">固定模型</option>
+                    <option value="auto">自动选择</option>
+                  </select>
+                  <span className="settings-input-caption">自动模式会根据设备选择最优模型</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">固定模型</span>
+                  <input className="settings-input-field" value={form.fixed_model} onChange={(e) => setForm({ ...form, fixed_model: e.target.value })} placeholder="tiny / base / small / medium / large-v3" />
+                  <span className="settings-input-caption">Whisper 模型名称，较小模型速度快但精度低</span>
+                </label>
+              </div>
+            </section>
+          )}
+
+          {/* LLM 设置 */}
+          {activeCategory === "llm" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>LLM 设置</h2>
+                <p>大语言模型摘要配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">启用 LLM 摘要</span>
+                  <select className="settings-select-field" value={form.llm_enabled ? "true" : "false"} onChange={(e) => setForm({ ...form, llm_enabled: e.target.value === "true" })}>
+                    <option value="false">关闭</option>
+                    <option value="true">开启</option>
+                  </select>
+                  <span className="settings-input-caption">使用大语言模型生成更高质量的视频摘要</span>
+                </label>
+                {form.llm_enabled && (
+                  <>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">LLM 提供商</span>
+                      <select className="settings-select-field" value={form.llm_provider} onChange={(e) => setForm({ ...form, llm_provider: e.target.value })}>
+                        <option value="openai-compatible">OpenAI Compatible</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="custom">自定义</option>
+                      </select>
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">API Base URL</span>
+                      <input className="settings-input-field" value={form.llm_base_url} onChange={(e) => setForm({ ...form, llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+                      <span className="settings-input-caption">LLM API 的基础 URL 地址</span>
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">API Key</span>
+                      <input className="settings-input-field" type="password" value={form.llm_api_key} onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })} placeholder="sk-..." />
+                      <span className="settings-input-caption">LLM 服务的 API 密钥</span>
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">模型名称</span>
+                      <input className="settings-input-field" value={form.llm_model} onChange={(e) => setForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
+                      <span className="settings-input-caption">要使用的 LLM 模型名称</span>
+                    </label>
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* 摘要参数 */}
+          {activeCategory === "summary" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>摘要参数</h2>
+                <p>摘要生成算法参数配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">摘要模式</span>
+                  <select className="settings-select-field" value={form.summary_mode} onChange={(e) => setForm({ ...form, summary_mode: e.target.value })}>
+                    <option value="llm">LLM 智能摘要</option>
+                    <option value="extract">抽取式摘要</option>
+                  </select>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">语言</span>
+                  <select className="settings-select-field" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                  </select>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">分块目标字符数</span>
+                  <input className="settings-input-field" type="number" value={form.summary_chunk_target_chars} onChange={(e) => setForm({ ...form, summary_chunk_target_chars: parseInt(e.target.value) || 2200 })} />
+                  <span className="settings-input-caption">LLM 处理时分块的目标字符数</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">分块重叠段数</span>
+                  <input className="settings-input-field" type="number" value={form.summary_chunk_overlap_segments} onChange={(e) => setForm({ ...form, summary_chunk_overlap_segments: parseInt(e.target.value) || 2 })} />
+                  <span className="settings-input-caption">分块之间的重叠段数，保证连续性</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">并发数</span>
+                  <input className="settings-input-field" type="number" value={form.summary_chunk_concurrency} onChange={(e) => setForm({ ...form, summary_chunk_concurrency: parseInt(e.target.value) || 2 })} />
+                  <span className="settings-input-caption">同时处理的分块数量</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">重试次数</span>
+                  <input className="settings-input-field" type="number" value={form.summary_chunk_retry_count} onChange={(e) => setForm({ ...form, summary_chunk_retry_count: parseInt(e.target.value) || 2 })} />
+                  <span className="settings-input-caption">API 调用失败时的重试次数</span>
+                </label>
+              </div>
+            </section>
+          )}
+
+          {/* 高级设置 */}
+          {activeCategory === "advanced" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>高级设置</h2>
+                <p>CUDA 变体和运行时配置</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">CUDA 变体</span>
+                  <select className="settings-select-field" value={form.cuda_variant} onChange={(e) => setForm({ ...form, cuda_variant: e.target.value })}>
+                    <option value="cu128">CUDA 12.8</option>
+                    <option value="cu126">CUDA 12.6</option>
+                    <option value="cu124">CUDA 12.4</option>
+                  </select>
+                  <span className="settings-input-caption">PyTorch CUDA 版本</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">运行时通道</span>
+                  <select className="settings-select-field" value={form.runtime_channel} onChange={(e) => setForm({ ...form, runtime_channel: e.target.value })}>
+                    <option value="base">基础版</option>
+                    <option value="gpu-cu128">GPU CUDA12.8</option>
+                    <option value="gpu-cu126">GPU CUDA12.6</option>
+                    <option value="gpu-cu124">GPU CUDA12.4</option>
+                  </select>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">保留临时音频</span>
+                  <select className="settings-select-field" value={form.preserve_temp_audio ? "true" : "false"} onChange={(e) => setForm({ ...form, preserve_temp_audio: e.target.value === "true" })}>
+                    <option value="false">不保留</option>
+                    <option value="true">保留</option>
+                  </select>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">启用缓存</span>
+                  <select className="settings-select-field" value={form.enable_cache ? "true" : "false"} onChange={(e) => setForm({ ...form, enable_cache: e.target.value === "true" })}>
+                    <option value="true">开启</option>
+                    <option value="false">关闭</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+          )}
+
+          {/* 运行环境 */}
+          {activeCategory === "environment" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>运行环境</h2>
+                <p>环境检测信息和 CUDA 配置</p>
+              </header>
+              <div className="env-summary-grid settings-env-grid">
+                <div className="metric-card">
+                  <span className="metric-label">推荐设备</span>
+                  <strong className="metric-value">{environment?.recommendedDevice || "-"}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">请求设备</span>
+                  <strong className="metric-value">{devicePreferenceLabel(form.device_preference)}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">生效设备</span>
+                  <strong className={`metric-value ${normalizeDevicePreference(form.whisper_device) === "cuda" ? "text-success" : ""}`}>{devicePreferenceLabel(form.whisper_device)}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">推荐模型</span>
+                  <strong className="metric-value">{environment?.recommendedModel || "-"}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">GPU 状态</span>
+                  <strong className={`metric-value ${environment?.cudaAvailable ? "text-success" : ""}`}>{environment?.cudaAvailable ? "已启用" : "未启用"}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">GPU 名称</span>
+                  <strong className="metric-value">{environment?.gpuName || "未检测到"}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">Torch</span>
+                  <strong className={`metric-value ${environment?.torchInstalled ? "text-success" : ""}`}>{environment?.torchInstalled ? environment?.torchVersion || "已安装" : "未安装"}</strong>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">Python</span>
+                  <strong className="metric-value">{environment?.pythonVersion || "-"}</strong>
+                </div>
+              </div>
+              <div className="settings-cuda-section">
+                <h3 className="settings-cuda-title">CUDA 目标版本</h3>
+                <div className="cuda-insight-grid">
+                  <div className="setting-row">
+                    <span className="setting-label">目标运行时</span>
+                    <span className="setting-value">{targetRuntimeChannel}</span>
+                  </div>
+                  <div className="setting-row">
+                    <span className="setting-label">当前运行时</span>
+                    <span className="setting-value">{environment?.runtimeChannel || form.runtime_channel || "base"}</span>
+                  </div>
+                  <div className="setting-row">
+                    <span className="setting-label">运行时状态</span>
+                    <span className="setting-value">{environment?.runtimeReady === false ? "未就绪" : "已就绪"}</span>
+                  </div>
+                </div>
+                <div className="settings-actions cuda-button-row">
+                  <label className="input-row cuda-picker">
+                    <span className="input-label">CUDA 目标版本</span>
+                    <select
+                      className="select-field"
+                      value={form.cuda_variant}
+                      disabled={cudaInstalling}
+                      onChange={(event) => setForm({ ...form, cuda_variant: event.target.value })}
+                    >
+                      <option value="cu128">CUDA 12.8</option>
+                      <option value="cu126">CUDA 12.6</option>
+                      <option value="cu124">CUDA 12.4</option>
+                    </select>
+                  </label>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={cudaInstalling}
+                    onClick={async () => {
+                      try {
+                        setCudaStatus("正在重新检测环境...");
+                        const nextEnvironment = await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true });
+                        setEnvironment(nextEnvironment);
+                        setCudaStatus("环境检测完成");
+                        onRefresh();
+                      } catch (error) {
+                        setCudaStatus(error instanceof Error ? error.message : "环境检测失败");
+                      }
+                    }}
+                  >
+                    重新检测
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={cudaInstalling}
+                    onClick={async () => {
+                      try {
+                        setCudaInstalling(true);
+                        setCudaStartedAt(Date.now());
+                        setCudaProgress(8);
+                        setCudaStage("准备 GPU 运行时目录");
+                        setCudaStatus("CUDA 安装已开始，正在准备运行时...");
+                        setCudaOutput("");
+                        setCudaDetail(
+                          `将为 ${targetRuntimeChannel} 安装 PyTorch CUDA 依赖，并把运行时切换到该通道。`
+                        );
+                        const result = await api.installCuda({ cuda_variant: form.cuda_variant });
+                        const nextRuntimeChannel = result.runtimeChannel || form.runtime_channel;
+                        setCudaInstalling(false);
+                        setCudaProgress(100);
+                        setCudaStage(result.restartRequired ? "CUDA 安装完成，等待重启切换运行时" : "CUDA 安装完成");
+                        setCudaStatus(
+                          result.restartRequired
+                            ? "CUDA 安装完成，请重启应用后切换到新的 GPU 运行时"
+                            : "CUDA 安装命令已执行"
+                        );
+                        setCudaOutput(result.stdoutTail || "");
+                        setCudaDetail(
+                          `安装目标：${result.cudaVariant || form.cuda_variant}，运行时通道：${nextRuntimeChannel}。`
+                        );
+                        setForm({ ...form, runtime_channel: nextRuntimeChannel, cuda_variant: result.cudaVariant || form.cuda_variant });
+                        setEnvironment(await api.getEnvironment({ runtimeChannel: nextRuntimeChannel, refresh: true }));
+                        onRefresh();
+                      } catch (error) {
+                        setCudaInstalling(false);
+                        setCudaStage("CUDA 安装失败");
+                        setCudaProgress((current) => (current > 0 ? current : 12));
+                        setCudaStatus(error instanceof Error ? error.message : "CUDA 安装失败");
+                        setCudaDetail(
+                          "安装在运行时依赖准备或 PyTorch CUDA 依赖下载阶段失败。请查看下方输出和服务日志。"
+                        );
+                      }
+                    }}
+                  >
+                    {cudaInstalling ? "安装中..." : "安装 CUDA 支持"}
+                  </button>
+                </div>
+              </div>
+              {(cudaInstalling || cudaProgress > 0 || cudaStatus) ? (
+                <div className="cuda-progress-card">
+                  <div className="progress-bar-wrapper">
+                    <div className="progress-bar-simple">
+                      <div
+                        className={`progress-fill-simple ${cudaStatus.includes("失败") ? "error" : cudaProgress >= 100 ? "success" : ""}`}
+                        style={{ width: `${Math.min(cudaProgress, 100)}%` }}
+                      />
+                    </div>
+                    <div className="progress-info-simple">
+                      <span className="progress-percent-simple">{Math.round(Math.min(cudaProgress, 100))}%</span>
+                      <span className="progress-status-simple">{cudaStage || "等待开始"}</span>
+                    </div>
+                  </div>
+                  <div className="cuda-stage-list">
+                    {cudaPhaseItems.map((phase) => (
+                      <div key={phase.label} className={`cuda-stage-item ${phase.state}`}>
+                        <span>{phase.label}</span>
+                        <strong>
+                          {phase.state === "done" ? "已完成" : phase.state === "active" ? "进行中" : "待执行"}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="cuda-helper-text">
+                    当前后端仍是同步安装接口，所以阶段进度是基于安装流程的可视化估计；最终结果以下方安装输出和重新检测结果为准。
+                  </p>
+                </div>
+              ) : null}
+              {cudaStatus ? <div className="action-status">{cudaStatus}</div> : null}
+              {cudaDetail ? <div className="cuda-helper-text">{cudaDetail}</div> : null}
+              {cudaOutput ? (
+                <label className="input-row">
+                  <span className="input-label">CUDA 安装输出</span>
+                  <textarea className="textarea-field log-viewer" rows={12} readOnly value={cudaOutput}></textarea>
+                </label>
+              ) : null}
+              {environment?.runtimeError ? (
+                <label className="input-row">
+                  <span className="input-label">运行时错误详情</span>
+                  <textarea className="textarea-field log-viewer" rows={8} readOnly value={environment.runtimeError}></textarea>
+                </label>
+              ) : null}
+              {(cudaStatus.includes("完成") || cudaProgress >= 100) ? (
+                <div className="cuda-next-steps">
+                  <strong>下一步建议</strong>
+                  <span>1. 点击"重新检测"确认当前 GPU runtime 已就绪。</span>
+                  <span>2. 确认"运行时通道"已经切到目标 GPU 通道。</span>
+                  <span>3. 若提示需要重启，请重启桌面应用后再开始转写任务。</span>
+                </div>
+              ) : null}
+            </section>
+          )}
+
+          {/* 日志与控制 */}
+          {activeCategory === "logs" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>日志与控制</h2>
+                <p>查看后端日志并控制服务</p>
+              </header>
+              <div className="control-status-row">
+                <span className={`helper-chip ${serviceOnline ? "status-success" : "status-failed"}`}>{serviceOnline ? "服务在线" : "服务离线"}</span>
+                <span className={`helper-chip ${backendRunning ? (backendReady ? "status-success" : "status-running") : "status-pending"}`}>
+                  {backendRunning ? (backendReady ? "内置后端运行中" : "内置后端启动中") : "内置后端未运行"}
+                </span>
+                {desktop.backend?.pid ? <span className="helper-chip">PID {desktop.backend.pid}</span> : null}
+              </div>
+              <div className="setting-list">
+                <div className="setting-row"><span className="setting-label">服务名</span><span className="setting-value">{snapshot.systemInfo?.application?.name || "-"}</span></div>
+                <div className="setting-row"><span className="setting-label">版本</span><span className="setting-value">{snapshot.systemInfo?.application?.version || "-"}</span></div>
+                <div className="setting-row"><span className="setting-label">日志文件</span><span className="setting-value">{effectiveLogPath}</span></div>
+              </div>
+              <div className="desktop-actions">
+                <button className="secondary-button" type="button" onClick={() => void refreshLogs()}>刷新日志</button>
+                <button
+                  className={backendRunning ? "secondary-button danger-button" : "primary-button"}
+                  type="button"
+                  onClick={async () => {
+                    if (backendRunning) {
+                      await window.desktop?.backend.stop();
+                      setServiceStatus("内置后端已停止");
+                    } else {
+                      await window.desktop?.backend.start();
+                      setServiceStatus("已请求启动内置后端");
+                    }
+                    onRefresh();
+                    await refreshLogs();
+                  }}
+                >
+                  {backendRunning ? "停止内置后端" : "启动内置后端"}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={async () => {
+                    await window.desktop?.shell.openPath(effectiveLogPath);
+                  }}
+                >
+                  打开日志文件
+                </button>
+                <button
+                  className="secondary-button danger-button"
+                  type="button"
+                  disabled={!serviceOnline}
+                  onClick={async () => {
+                    await api.shutdownService();
+                    setServiceStatus("已向服务发送关闭请求");
+                    onRefresh();
+                    await refreshLogs();
+                  }}
+                >
+                  强制关闭服务
+                </button>
+              </div>
+              {desktop.backend?.lastError ? <div className="action-status">{desktop.backend.lastError}</div> : null}
+              {serviceStatus ? <div className="action-status">{serviceStatus}</div> : null}
+              <label className="input-row">
+                <span className="input-label">最近日志</span>
+                <textarea className="textarea-field log-viewer" rows={20} readOnly value={logOutput}></textarea>
+              </label>
+            </section>
+          )}
         </div>
-        <div className="setting-list">
-          <div className="setting-row">
-            <span className="setting-label">当前版本</span>
-            <span className="setting-value">
-              <code>v{desktop.version}</code>
-            </span>
-          </div>
-          <div className="setting-row">
-            <span className="setting-label">更新状态</span>
-            <span className="setting-value">{updateStatus || "未检查"}</span>
-          </div>
-        </div>
-        <br></br>
-        <div className="desktop-actions">
-          <button
-            className="primary-button"
-            type="button"
-            disabled={checkingUpdate}
-            onClick={async () => {
-              setCheckingUpdate(true);
-              setUpdateStatus("正在检查更新...");
-              try {
-                const result = await window.desktop?.update?.check();
-                if (result) {
-                  if (result.status === "available") {
-                    setUpdateStatus(`发现新版本：v${result.version}`);
-                    onOpenUpdateDialog();
-                  } else if (result.status === "not-available") {
-                    setUpdateStatus("已是最新版本");
-                  } else if (result.status === "error") {
-                    setUpdateStatus(`检查失败：${result.errorMessage}`);
-                  } else {
-                    setUpdateStatus(`状态：${result.status}`);
-                  }
-                }
-              } catch (error) {
-                setUpdateStatus(error instanceof Error ? error.message : "检查更新失败");
-              } finally {
-                setCheckingUpdate(false);
-              }
-            }}
-          >
-            {checkingUpdate ? "检查中..." : "检查更新"}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => {
-              setUpdateStatus("");
-            }}
-          >
-            清除状态
-          </button>
-          {(updateInfo.status === "available" || updateInfo.status === "downloaded" || updateInfo.status === "downloading") ? (
-            <button className="secondary-button" type="button" onClick={onOpenUpdateDialog}>
-              打开更新弹窗
-            </button>
-          ) : null}
-        </div>
-        <br></br>
-        {updateStatus ? <div className="action-status">{updateStatus}</div> : null}
-      </article>
-    </section>
+      </main>
+    </div>
   );
 }
 
