@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { emptySnapshot, getUpdateDialogSignal, normalizeDevicePreference, toUpdateState, type DesktopState, type LibraryFilter, type Snapshot, type UpdateState } from "./appModel";
+import { deriveRuntimeDeviceLabel, emptySnapshot, getUpdateDialogSignal, toUpdateState, type DesktopState, type LibraryFilter, type Snapshot, type UpdateState } from "./appModel";
 import { api } from "./api";
 import { HomeIcon, LibraryIcon, SettingsIcon } from "./components/AppIcons";
 import { SidebarStatusItem } from "./components/AppPrimitives";
@@ -11,6 +11,7 @@ import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VideoDetailPage } from "./pages/VideoDetailPage";
+import type { VideoAssetSummary } from "./types";
 
 export function App() {
   const location = useLocation();
@@ -21,7 +22,7 @@ export function App() {
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [probeUrl, setProbeUrl] = useState("");
   const [submitStatus, setSubmitStatus] = useState("");
-  const [probePreview, setProbePreview] = useState(null);
+  const [probePreview, setProbePreview] = useState<VideoAssetSummary | null>(null);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -190,14 +191,11 @@ export function App() {
   }, [snapshot.videos]);
 
   const runtimeDeviceLabel = useMemo(() => {
-    const effectiveDevice = normalizeDevicePreference(snapshot.settings?.whisper_device);
-    if (effectiveDevice === "cuda") {
-      return "GPU";
-    }
-    if (!snapshot.settings && snapshot.environment?.cudaAvailable) {
-      return "GPU";
-    }
-    return "CPU";
+    return deriveRuntimeDeviceLabel({
+      whisperDevice: snapshot.settings?.whisper_device,
+      cudaAvailable: snapshot.environment?.cudaAvailable,
+      hasSettings: Boolean(snapshot.settings),
+    });
   }, [snapshot.environment?.cudaAvailable, snapshot.settings]);
 
   async function handleProbe(event: FormEvent) {

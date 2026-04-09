@@ -66,6 +66,25 @@ export function devicePreferenceLabel(value?: string | null): string {
   return "CPU";
 }
 
+export function deriveRuntimeDeviceLabel({
+  whisperDevice,
+  cudaAvailable,
+  hasSettings,
+}: {
+  whisperDevice?: string | null;
+  cudaAvailable?: boolean;
+  hasSettings: boolean;
+}): "GPU" | "CPU" {
+  const effectiveDevice = normalizeDevicePreference(whisperDevice);
+  if (effectiveDevice === "cuda") {
+    return "GPU";
+  }
+  if (!hasSettings && cudaAvailable) {
+    return "GPU";
+  }
+  return "CPU";
+}
+
 export function toUpdateState(info: UpdateInfo): UpdateState {
   return {
     status: info.status,

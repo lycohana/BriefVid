@@ -118,7 +118,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                 if (!window.confirm("确定要从视频库删除这个视频吗？")) return;
                 await api.deleteVideo(video.video_id);
                 onRefresh();
-                navigate("/");
+                navigate("/library");
               }}
             >
               从视频库删除

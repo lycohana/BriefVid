@@ -11,9 +11,11 @@
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --config vite.config.ts",
     "dev:electron": "wait-on tcp:5173 && npm run build:electron && cross-env BRIEFVID_RENDERER_URL=http://127.0.0.1:5173 electron ./dist-electron/main.js",
+    "test": "node --experimental-strip-types test/runtime-device-label.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:renderer": "vite build --config vite.config.ts",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build": "npm run build:renderer && npm run build:electron",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
     "package:win": "powershell -ExecutionPolicy Bypass -File ../../packaging/desktop/build_windows.ps1",
     "package:win-notfront": "powershell -ExecutionPolicy Bypass -File ../../packaging/desktop/build_windows.ps1 -SkipPrebuild"
   },

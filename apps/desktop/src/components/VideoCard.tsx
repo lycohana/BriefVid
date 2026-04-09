@@ -21,7 +21,7 @@ export function VideoCard({ video }: { video: VideoAssetSummary }) {
         <h3>{video.title}</h3>
         <div className="video-card-meta">
           <span>{formatDateTime(video.updated_at)}</span>
-          <span>{video.latest_result ? "摘要已生成" : "等待结果"}</span>
+          <span>{video.has_result ? "摘要已生成" : "等待结果"}</span>
         </div>
       </div>
     </Link>
