@@ -3199,7 +3199,7 @@ textarea {
     position: static;
     width: auto;
     height: auto;
-    padding-top: 24px;
+    padding-top: calc(var(--title-bar-height) + 20px);
     border-right: none;
     border-bottom: 1px solid var(--border-subtle);
   }
