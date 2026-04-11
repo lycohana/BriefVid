@@ -3615,6 +3615,13 @@ textarea {
   align-content: start;
 }
 
+.detail-chapter-card-action {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .detail-chapter-time {
   display: inline-flex;
   align-items: center;

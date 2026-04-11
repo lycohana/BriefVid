@@ -44,6 +44,11 @@ type RefreshDetailOptions = {
   syncLibrary?: boolean;
 };
 
+type PlayerSeekTarget = {
+  nonce: number;
+  seconds: number | null;
+};
+
 const detailTabs: Array<{ id: DetailTab; label: string; description: string }> = [
   { id: "knowledge", label: "知识卡片", description: "按概览、要点、章节整理当前任务结果。" },
   { id: "summary", label: "摘要结果", description: "查看当前任务的原始摘要、时间轴和全文转写。" },
@@ -109,6 +114,17 @@ function buildBilibiliEmbedUrl(sourceUrl?: string | null) {
   }
 }
 
+function withBilibiliPlayerSeek(embedUrl: string, seconds: number | null, nonce: number) {
+  const url = new URL(embedUrl);
+  if (seconds != null && Number.isFinite(seconds) && seconds >= 0) {
+    url.searchParams.set("t", String(Math.floor(seconds)));
+  } else {
+    url.searchParams.delete("t");
+  }
+  url.searchParams.set("_ts", String(nonce));
+  return url.toString();
+}
+
 function omitRecordKey<T>(record: Record<string, T>, key: string) {
   if (!(key in record)) {
     return record;
@@ -136,9 +152,11 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [taskPanelState, setTaskPanelState] = useState<TaskPanelState>("collapsed");
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [status, setStatus] = useState("");
+  const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
   const lastAutoRefreshEventRef = useRef<string | null>(null);
   const taskPopoverRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
+  const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const activeVideoIdRef = useRef(videoId);
   const selectedTaskIdRef = useRef<string | null>(null);
   const refreshRequestRef = useRef(0);
@@ -148,6 +166,10 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
 
   useEffect(() => {
     activeVideoIdRef.current = videoId;
+  }, [videoId]);
+
+  useEffect(() => {
+    setPlayerSeekTarget({ nonce: 0, seconds: null });
   }, [videoId]);
 
   useEffect(() => {
@@ -494,7 +516,21 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     { id: "progress", label: "最新运行", value: heroProgressSummary },
     { id: "content", label: "当前查看", value: selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
   ];
-  const bilibiliEmbedUrl = buildBilibiliEmbedUrl(video?.source_url);
+  const bilibiliEmbedBaseUrl = buildBilibiliEmbedUrl(video?.source_url);
+  const bilibiliEmbedUrl = useMemo(() => {
+    if (!bilibiliEmbedBaseUrl) {
+      return null;
+    }
+    return withBilibiliPlayerSeek(bilibiliEmbedBaseUrl, playerSeekTarget.seconds, playerSeekTarget.nonce);
+  }, [bilibiliEmbedBaseUrl, playerSeekTarget]);
+
+  function handleSeekToChapter(seconds: number | null) {
+    if (!bilibiliEmbedBaseUrl || seconds == null) {
+      return;
+    }
+    setPlayerSeekTarget((current) => ({ nonce: current.nonce + 1, seconds }));
+    playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   if (!video) {
     return <section className="grid-card empty-state-card">正在加载视频详情...</section>;
@@ -928,7 +964,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       <h4 className="detail-section-title">{overviewCard?.title || "核心概览"}</h4>
                       <p className="detail-section-body">{overviewCard?.content || "当前任务还没有生成核心概览。"}</p>
                       {bilibiliEmbedUrl ? (
-                        <div className="detail-overview-player">
+                        <div className="detail-overview-player" ref={playerFrameRef}>
                           <div className="detail-section-heading">
                             <h3 className="detail-section-label">Player</h3>
                             <a className="detail-section-meta detail-section-link" href={video.source_url} target="_blank" rel="noreferrer">在 Bilibili 打开</a>
@@ -971,11 +1007,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       <span className="detail-section-meta">{chapterCards.length} 条</span>
                     </div>
                     {chapterCards.length ? (
-                      <div className="knowledge-card-grid knowledge-card-grid-chapters">
-                        {chapterCards.map((card, index) => (
-                          <KnowledgeCardBlock card={card} index={index} key={card.id} />
-                        ))}
-                      </div>
+                        <div className="knowledge-card-grid knowledge-card-grid-chapters">
+                          {chapterCards.map((card, index) => (
+                            <KnowledgeCardBlock
+                              card={card}
+                              index={index}
+                              key={card.id}
+                              onSeekToTimestamp={bilibiliEmbedBaseUrl ? handleSeekToChapter : undefined}
+                            />
+                          ))}
+                        </div>
                     ) : (
                       <div className="empty-placeholder">当前任务还没有生成章节知识卡。</div>
                     )}
@@ -1080,10 +1121,18 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   );
 }
 
-function KnowledgeCardBlock({ card, index }: { card: KnowledgeCard; index: number }) {
+function KnowledgeCardBlock({
+  card,
+  index,
+  onSeekToTimestamp,
+}: {
+  card: KnowledgeCard;
+  index: number;
+  onSeekToTimestamp?: (seconds: number | null) => void;
+}) {
   if (card.kind === "chapter") {
-    return (
-      <article className="detail-chapter-card">
+    const chapterCardBody = (
+      <>
         <div className="detail-chapter-card-top">
           <div className="detail-chapter-time">
             <IconClock className="detail-inline-icon" />
@@ -1097,6 +1146,20 @@ function KnowledgeCardBlock({ card, index }: { card: KnowledgeCard; index: numbe
           查看片段
           <IconArrowRight className="detail-inline-icon" />
         </div>
+      </>
+    );
+
+    if (typeof card.timestampSeconds === "number" && onSeekToTimestamp) {
+      return (
+        <button className="detail-chapter-card detail-chapter-card-action" type="button" onClick={() => onSeekToTimestamp(card.timestampSeconds ?? null)}>
+          {chapterCardBody}
+        </button>
+      );
+    }
+
+    return (
+      <article className="detail-chapter-card">
+        {chapterCardBody}
       </article>
     );
   }
