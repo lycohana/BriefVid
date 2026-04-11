@@ -82,8 +82,12 @@ export const api = {
   getVideoTasks(videoId) {
     return fetchJson(`/api/v1/videos/${videoId}/tasks`);
   },
-  createVideoTask(videoId) {
-    return fetchJson(`/api/v1/videos/${videoId}/tasks`, { method: "POST" });
+  createVideoTask(videoId, payload = {}) {
+    return fetchJson(`/api/v1/videos/${videoId}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   },
   listTasks() {
     return fetchJson("/api/v1/tasks");

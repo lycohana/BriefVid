@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+from urllib.parse import urlencode, urlparse
 import venv
 
 from fastapi import FastAPI, HTTPException, status
@@ -19,7 +20,7 @@ from yt_dlp import YoutubeDL
 
 from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
-from video_sum_core.utils import normalize_video_url
+from video_sum_core.utils import extract_bilibili_page, normalize_video_url
 from video_sum_infra.app import AppInfo
 from video_sum_infra.config import ServiceSettings
 from video_sum_infra.db import connect_sqlite
@@ -52,8 +53,10 @@ from video_sum_service.schemas import (
     VideoAssetDetailResponse,
     VideoAssetRecord,
     VideoAssetSummaryResponse,
+    VideoPageOptionResponse,
     VideoProbeRequest,
     VideoProbeResponse,
+    VideoTaskCreateRequest,
 )
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
 from video_sum_service.worker import TaskWorker
@@ -488,25 +491,179 @@ def cache_cover_image(source_url: str, canonical_id: str, referer_url: str | Non
         return normalized_source
 
 
-def probe_video_asset(url: str, force_refresh: bool = False) -> VideoAssetRecord:
-    normalized_url, canonical_id = normalize_video_url(url)
-    with YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-        info = ydl.extract_info(normalized_url, download=False)
+def _with_bilibili_page(url: str, page: int) -> str:
+    parsed = urlparse(url)
+    query_pairs: list[tuple[str, str]] = []
+    if parsed.query:
+        for chunk in parsed.query.split("&"):
+            if not chunk:
+                continue
+            key, _, value = chunk.partition("=")
+            if key != "p":
+                query_pairs.append((key, value))
+    query_pairs.append(("p", str(page)))
+    encoded_query = urlencode(query_pairs)
+    return parsed._replace(query=encoded_query).geturl()
+
+
+def _build_page_canonical_id(base_id: str, page: int) -> str:
+    return f"{base_id}?p={page}"
+
+
+def _build_page_title(base_title: str, page: int, info: dict[str, object]) -> str:
+    part = str(info.get("part") or "").strip()
+    title = str(info.get("title") or "").strip()
+    candidate = part or title
+    if not candidate:
+        return f"{base_title} - P{page}"
+    if candidate == base_title or candidate.startswith(base_title):
+        return candidate
+    if candidate.lower().startswith(f"p{page}"):
+        return candidate
+    return f"{base_title} - P{page} {candidate}"
+
+
+def _extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, object]:
+    options: dict[str, object] = {"quiet": True, "no_warnings": True}
+    if extract_flat:
+        options["extract_flat"] = "in_playlist"
+    with YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
     if not isinstance(info, dict):
         raise HTTPException(status_code=400, detail="无法读取视频信息。")
+    return info
+
+
+def _build_base_video_asset(
+    *,
+    canonical_id: str,
+    platform: str,
+    title: str,
+    source_url: str,
+    cover_url: str,
+    duration: float | None,
+    pages: list[VideoPageOptionResponse],
+) -> VideoAssetRecord:
+    return VideoAssetRecord(
+        canonical_id=canonical_id,
+        platform=platform,
+        title=title,
+        source_url=source_url,
+        cover_url=cover_url,
+        duration=duration,
+        pages=pages,
+    )
+
+
+def _resolve_video_page(video: VideoAssetRecord, page_number: int | None) -> VideoPageOptionResponse | None:
+    if not video.pages:
+        return None
+    target_page = page_number or 1
+    return next((page for page in video.pages if page.page == target_page), None)
+
+
+def probe_video_asset(
+    url: str,
+    force_refresh: bool = False,
+) -> tuple[VideoAssetRecord, list[VideoPageOptionResponse], bool]:
+    normalized_url, canonical_id = normalize_video_url(url)
+    requested_page = extract_bilibili_page(normalized_url)
+
+    if requested_page is None:
+        flat_info = _extract_video_info(normalized_url, extract_flat=True)
+        flat_entries = [entry for entry in flat_info.get("entries", []) if isinstance(entry, dict)]
+        if len(flat_entries) > 1:
+            top_title = str(flat_info.get("title") or canonical_id or normalized_url)
+            top_id = str(flat_info.get("id") or canonical_id or normalized_url)
+            pages: list[VideoPageOptionResponse] = []
+            for index, entry in enumerate(flat_entries, start=1):
+                page_url = str(entry.get("url") or _with_bilibili_page(f"https://www.bilibili.com/video/{canonical_id}", index))
+                page_title = str(entry.get("title") or "").strip() or f"{top_title} - P{index}"
+                pages.append(
+                    VideoPageOptionResponse(
+                        page=index,
+                        title=page_title,
+                        source_url=page_url,
+                        cover_url="",
+                        duration=None,
+                    )
+                )
+
+            return (
+                _build_base_video_asset(
+                    canonical_id=top_id,
+                    platform=str(flat_info.get("extractor_key") or "video").lower(),
+                    title=top_title,
+                    source_url=f"https://www.bilibili.com/video/{canonical_id}",
+                    cover_url="",
+                    duration=None,
+                    pages=pages,
+                ),
+                pages,
+                True,
+            )
+
+    info = _extract_video_info(normalized_url)
+
     title = str(info.get("title") or canonical_id or normalized_url)
     thumbnail = str(info.get("thumbnail") or "")
     duration = float(info.get("duration")) if info.get("duration") else None
     platform = str(info.get("extractor_key") or "video").lower()
     actual_id = str(info.get("id") or canonical_id or normalized_url)
+    entries = [entry for entry in info.get("entries", []) if isinstance(entry, dict)]
+
+    if entries:
+        pages: list[VideoPageOptionResponse] = []
+        for index, entry in enumerate(entries, start=1):
+            page = int(entry.get("page") or entry.get("playlist_index") or index)
+            page_title = _build_page_title(title, page, entry)
+            page_url = _with_bilibili_page(f"https://www.bilibili.com/video/{canonical_id}", page)
+            page_cover = str(entry.get("thumbnail") or thumbnail or "")
+            page_duration = float(entry.get("duration")) if entry.get("duration") else None
+            pages.append(
+                VideoPageOptionResponse(
+                    page=page,
+                    title=page_title,
+                    source_url=page_url,
+                    cover_url=page_cover,
+                    duration=page_duration,
+                )
+            )
+
+        selected_page = requested_page or pages[0].page
+        selected = next((item for item in pages if item.page == selected_page), pages[0])
+        selected_cover = cache_cover_image(
+            selected.cover_url or thumbnail,
+            actual_id,
+            referer_url=selected.source_url,
+        )
+        return (
+            _build_base_video_asset(
+                canonical_id=actual_id,
+                platform=platform,
+                title=title,
+                source_url=f"https://www.bilibili.com/video/{canonical_id}",
+                cover_url=selected_cover,
+                duration=duration,
+                pages=pages,
+            ),
+            pages,
+            requested_page is None and len(pages) > 1,
+        )
+
     cached_cover_url = cache_cover_image(thumbnail, actual_id, referer_url=normalized_url)
-    return VideoAssetRecord(
-        canonical_id=actual_id,
-        platform=platform,
-        title=title,
-        source_url=normalized_url,
-        cover_url=cached_cover_url,
-        duration=duration,
+    return (
+        _build_base_video_asset(
+            canonical_id=actual_id,
+            platform=platform,
+            title=title,
+            source_url=normalized_url,
+            cover_url=cached_cover_url,
+            duration=duration,
+            pages=[],
+        ),
+        [],
+        False,
     )
 
 
@@ -748,12 +905,17 @@ def post_cuda_install(payload: dict[str, object]) -> dict[str, object]:
 def probe_video(request: VideoProbeRequest) -> VideoProbeResponse:
     task_store: SqliteTaskRepository = app.state.task_repository
     logger.info("probe video url=%s force_refresh=%s", request.url, request.force_refresh)
-    probed = probe_video_asset(request.url, request.force_refresh)
+    probed, pages, requires_selection = probe_video_asset(request.url, request.force_refresh)
     existing = task_store.get_video_asset_by_canonical_id(probed.canonical_id)
     cached = existing is not None and not request.force_refresh
     asset = existing if cached else task_store.upsert_video_asset(probed)
     asset = localize_video_cover(task_store, asset)
-    return VideoProbeResponse(video=asset.to_summary(), cached=cached)
+    return VideoProbeResponse(
+        video=asset.to_summary(),
+        cached=cached,
+        requires_selection=requires_selection,
+        pages=asset.pages or pages,
+    )
 
 
 @app.get("/api/v1/videos", response_model=list[VideoAssetSummaryResponse])
@@ -788,16 +950,44 @@ def get_video_tasks(video_id: str) -> list[TaskSummaryResponse]:
 
 
 @app.post("/api/v1/videos/{video_id}/tasks", response_model=TaskDetailResponse, status_code=status.HTTP_201_CREATED)
-def create_video_task(video_id: str) -> TaskDetailResponse:
+def create_video_task(video_id: str, request: VideoTaskCreateRequest | None = None) -> TaskDetailResponse:
     task_store: SqliteTaskRepository = app.state.task_repository
     task_worker: TaskWorker = app.state.task_worker
     video = task_store.get_video_asset(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found.")
-    logger.info("create video task video_id=%s title=%s source=%s", video.video_id, video.title, video.source_url)
+    page = _resolve_video_page(video, request.page_number if request else None)
+    if video.pages and request and request.page_number is not None and page is None:
+        raise HTTPException(status_code=400, detail="Selected page not found.")
+    if page and (not video.cover_url or video.duration is None or page.cover_url == "" or page.duration is None):
+        refreshed_video, _, _ = probe_video_asset(page.source_url, force_refresh=False)
+        merged_pages = refreshed_video.pages or video.pages
+        merged_page = next((item for item in merged_pages if item.page == page.page), page)
+        video = task_store.upsert_video_asset(
+            video.model_copy(
+                update={
+                    "cover_url": refreshed_video.cover_url or video.cover_url,
+                    "duration": refreshed_video.duration if refreshed_video.duration is not None else video.duration,
+                    "pages": merged_pages,
+                }
+            )
+        )
+        page = merged_page
+        page = _resolve_video_page(video, request.page_number if request else None) or page
+    source_url = page.source_url if page else video.source_url
+    title = page.title if page else video.title
+    logger.info(
+        "create video task video_id=%s page=%s title=%s source=%s",
+        video.video_id,
+        page.page if page else None,
+        title,
+        source_url,
+    )
     record = task_store.create_task(
-        TaskInput(input_type=InputType.URL, source=video.source_url, title=video.title),
+        TaskInput(input_type=InputType.URL, source=source_url, title=title),
         video_id=video.video_id,
+        page_number=page.page if page else None,
+        page_title=title,
     )
     task_worker.submit(record)
     refreshed = task_store.get_task(record.task_id)
@@ -819,7 +1009,15 @@ def create_video_resummary_task(video_id: str, request: ResummaryRequest) -> Tas
             (
                 task
                 for task in task_store.list_tasks_for_video(video_id)
-                if task.result and task.result.transcript_text.strip() and task.result.artifacts.get("summary_path")
+                if (
+                    task.result
+                    and task.result.transcript_text.strip()
+                    and task.result.artifacts.get("summary_path")
+                    and (
+                        request.page_number is None
+                        or task.page_number == request.page_number
+                    )
+                )
             ),
             None,
         )
@@ -858,6 +1056,8 @@ def create_video_resummary_task(video_id: str, request: ResummaryRequest) -> Tas
             options=source_task.task_input.options,
         ),
         video_id=video.video_id,
+        page_number=source_task.page_number,
+        page_title=source_task.page_title or source_task.task_input.title or video.title,
     )
     task_worker.submit(record)
     refreshed = task_store.get_task(record.task_id)
@@ -879,7 +1079,7 @@ def create_task(request: TaskCreateRequest) -> TaskDetailResponse:
 
     video_id = request.video_id
     if video_id is None and request.input_type is InputType.URL:
-        probed = probe_video_asset(request.source)
+        probed, _, _ = probe_video_asset(request.source)
         asset = task_store.upsert_video_asset(probed)
         video_id = asset.video_id
 
@@ -892,6 +1092,8 @@ def create_task(request: TaskCreateRequest) -> TaskDetailResponse:
             options=request.options,
         ),
         video_id=video_id,
+        page_number=extract_bilibili_page(request.source) if request.input_type is InputType.URL else None,
+        page_title=request.title,
     )
     task_worker.submit(record)
     refreshed = task_store.get_task(record.task_id)

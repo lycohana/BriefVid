@@ -7,6 +7,7 @@ import type {
   TaskEvent,
   TaskSummary,
   VideoAssetDetail,
+  VideoProbeResult,
   VideoAssetSummary,
 } from "./types";
 
@@ -75,7 +76,7 @@ export const api = {
     return fetchJson<{ deleted: boolean }>(`/api/v1/videos/${videoId}`, { method: "DELETE" });
   },
   probeVideo(payload: { url: string; force_refresh: boolean }) {
-    return fetchJson<{ video: VideoAssetSummary; cached: boolean }>("/api/v1/videos/probe", {
+    return fetchJson<VideoProbeResult>("/api/v1/videos/probe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -84,10 +85,14 @@ export const api = {
   getVideoTasks(videoId: string) {
     return fetchJson<TaskSummary[]>(`/api/v1/videos/${videoId}/tasks`);
   },
-  createVideoTask(videoId: string) {
-    return fetchJson<TaskDetail>(`/api/v1/videos/${videoId}/tasks`, { method: "POST" });
+  createVideoTask(videoId: string, payload?: { page_number?: number | null }) {
+    return fetchJson<TaskDetail>(`/api/v1/videos/${videoId}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    });
   },
-  resummarizeVideoTask(videoId: string, payload: { task_id?: string | null }) {
+  resummarizeVideoTask(videoId: string, payload: { task_id?: string | null; page_number?: number | null }) {
     return fetchJson<TaskDetail>(`/api/v1/videos/${videoId}/tasks/resummary`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

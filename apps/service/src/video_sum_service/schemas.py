@@ -4,6 +4,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from video_sum_core.models.tasks import TaskInput, TaskResult, TaskStatus
+from video_sum_core.utils import extract_bilibili_page
 
 
 class TaskCreateRequest(TaskInput):
@@ -12,11 +13,24 @@ class TaskCreateRequest(TaskInput):
 
 class ResummaryRequest(BaseModel):
     task_id: str | None = None
+    page_number: int | None = None
+
+
+class VideoTaskCreateRequest(BaseModel):
+    page_number: int | None = None
 
 
 class VideoProbeRequest(BaseModel):
     url: str
     force_refresh: bool = False
+
+
+class VideoPageOptionResponse(BaseModel):
+    page: int
+    title: str
+    source_url: str
+    cover_url: str = ""
+    duration: float | None = None
 
 
 class VideoAssetSummaryResponse(BaseModel):
@@ -31,6 +45,7 @@ class VideoAssetSummaryResponse(BaseModel):
     latest_status: TaskStatus | None = None
     latest_stage: str | None = None
     has_result: bool = False
+    pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -53,6 +68,7 @@ class VideoAssetRecord(BaseModel):
     latest_stage: str | None = None
     latest_result: TaskResult | None = None
     latest_error_message: str | None = None
+    pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -69,6 +85,7 @@ class VideoAssetRecord(BaseModel):
             latest_status=self.latest_status,
             latest_stage=self.latest_stage,
             has_result=self.latest_result is not None,
+            pages=self.pages,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -84,6 +101,8 @@ class VideoAssetRecord(BaseModel):
 class VideoProbeResponse(BaseModel):
     video: VideoAssetSummaryResponse
     cached: bool = False
+    requires_selection: bool = False
+    pages: list[VideoPageOptionResponse] = Field(default_factory=list)
 
 
 class TaskSummaryResponse(BaseModel):
@@ -93,6 +112,8 @@ class TaskSummaryResponse(BaseModel):
     input_type: str
     source: str
     title: str | None = None
+    page_number: int | None = None
+    page_title: str | None = None
     created_at: datetime
     updated_at: datetime
     llm_total_tokens: int | None = None
@@ -129,6 +150,8 @@ class TaskRecord(BaseModel):
     video_id: str | None = None
     status: TaskStatus = TaskStatus.QUEUED
     task_input: TaskInput
+    page_number: int | None = None
+    page_title: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     result: TaskResult | None = None
@@ -142,6 +165,7 @@ class TaskRecord(BaseModel):
         return max(0.0, (self.updated_at - self.created_at).total_seconds())
 
     def to_summary(self) -> TaskSummaryResponse:
+        page_number = self.page_number if self.page_number is not None else extract_bilibili_page(self.task_input.source)
         return TaskSummaryResponse(
             task_id=self.task_id,
             video_id=self.video_id,
@@ -149,6 +173,8 @@ class TaskRecord(BaseModel):
             input_type=self.task_input.input_type.value,
             source=self.task_input.source,
             title=self.task_input.title,
+            page_number=page_number,
+            page_title=self.page_title or self.task_input.title,
             created_at=self.created_at,
             updated_at=self.updated_at,
             llm_total_tokens=self.result.llm_total_tokens if self.result else None,

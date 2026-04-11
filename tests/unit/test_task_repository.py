@@ -143,3 +143,62 @@ def test_repository_deletes_task() -> None:
 
     assert deleted is True
     assert repository.get_task(record.task_id) is None
+
+
+def test_repository_consolidates_legacy_page_asset_into_single_bvid() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    legacy = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV-merge?p=1",
+            platform="bilibili",
+            title="旧版 P1 资产",
+            source_url="https://www.bilibili.com/video/BV-merge?p=1",
+        )
+    )
+    repository.create_task(
+        TaskInput(input_type=InputType.URL, source="https://www.bilibili.com/video/BV-merge?p=1", title="P1"),
+        video_id=legacy.video_id,
+    )
+
+    merged = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV-merge",
+            platform="bilibili",
+            title="基础 BV 资产",
+            source_url="https://www.bilibili.com/video/BV-merge",
+        )
+    )
+
+    videos = repository.list_video_assets()
+    tasks = repository.list_tasks_for_video(merged.video_id)
+
+    assert merged.video_id == legacy.video_id
+    assert merged.canonical_id == "BV-merge"
+    assert len(videos) == 1
+    assert len(tasks) == 1
+    assert tasks[0].video_id == merged.video_id
+
+
+def test_repository_persists_task_page_metadata() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    record = repository.create_task(
+        TaskInput(input_type=InputType.TRANSCRIPT_TEXT, source="{\"transcript\":\"x\"}", title="P3 重摘要"),
+        video_id="video-1",
+        page_number=3,
+        page_title="P3 重摘要",
+    )
+
+    fetched = repository.get_task(record.task_id)
+
+    assert fetched is not None
+    assert fetched.page_number == 3
+    assert fetched.page_title == "P3 重摘要"
+    assert fetched.to_summary().page_number == 3

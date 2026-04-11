@@ -30,13 +30,29 @@ export type VideoAssetSummary = {
   latest_status?: TaskStatus | null;
   latest_stage?: string | null;
   has_result: boolean;
+  pages: VideoPageOption[];
   created_at: string;
   updated_at: string;
+};
+
+export type VideoPageOption = {
+  page: number;
+  title: string;
+  source_url: string;
+  cover_url: string;
+  duration?: number | null;
 };
 
 export type VideoAssetDetail = VideoAssetSummary & {
   latest_result?: TaskResult | null;
   latest_error_message?: string | null;
+};
+
+export type VideoProbeResult = {
+  video: VideoAssetSummary;
+  cached: boolean;
+  requires_selection: boolean;
+  pages: VideoPageOption[];
 };
 
 export type TaskSummary = {
@@ -46,6 +62,8 @@ export type TaskSummary = {
   input_type: string;
   source: string;
   title?: string | null;
+  page_number?: number | null;
+  page_title?: string | null;
   created_at: string;
   updated_at: string;
   llm_total_tokens?: number | null;

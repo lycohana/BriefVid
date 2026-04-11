@@ -4,6 +4,7 @@ import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { deriveRuntimeDeviceLabel, emptySnapshot, getUpdateDialogSignal, isUpdateUnsupported, toUpdateState, type DesktopState, type LibraryFilter, type Snapshot, type UpdateState } from "./appModel";
 import { api } from "./api";
 import { HomeIcon, LibraryIcon, SettingsIcon } from "./components/AppIcons";
+import { MultiPageSelectDialog } from "./components/MultiPageSelectDialog";
 import { SidebarStatusItem } from "./components/AppPrimitives";
 import { TitleBar } from "./components/TitleBar";
 import { UpdateDialog, type UpdateInfo } from "./components/UpdateDialog";
@@ -11,7 +12,7 @@ import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VideoDetailPage } from "./pages/VideoDetailPage";
-import type { VideoAssetSummary } from "./types";
+import type { VideoAssetSummary, VideoPageOption } from "./types";
 
 export function App() {
   const location = useLocation();
@@ -23,6 +24,9 @@ export function App() {
   const [probeUrl, setProbeUrl] = useState("");
   const [submitStatus, setSubmitStatus] = useState("");
   const [probePreview, setProbePreview] = useState<VideoAssetSummary | null>(null);
+  const [multiPageDialogOpen, setMultiPageDialogOpen] = useState(false);
+  const [multiPageProbeVideo, setMultiPageProbeVideo] = useState<VideoAssetSummary | null>(null);
+  const [multiPageOptions, setMultiPageOptions] = useState<VideoPageOption[]>([]);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === "undefined") {
@@ -233,6 +237,13 @@ export function App() {
     try {
       const response = await api.probeVideo({ url: probeUrl.trim(), force_refresh: false });
       setProbePreview(response.video);
+      if (response.requires_selection && response.pages.length > 0) {
+        setMultiPageProbeVideo(response.video);
+        setMultiPageOptions(response.pages);
+        setMultiPageDialogOpen(true);
+        setSubmitStatus(`检测到 ${response.pages.length} 个分 P，请先选择要解析的内容`);
+        return;
+      }
       await api.createVideoTask(response.video.video_id);
       setSubmitStatus(response.cached ? "已从视频库读取并开始总结" : "视频已加入本地库并开始总结");
       setProbeUrl("");
@@ -241,6 +252,28 @@ export function App() {
     } catch (error) {
       setSubmitStatus(error instanceof Error ? error.message : "开始总结失败");
     }
+  }
+
+  async function handleConfirmMultiPage(page: VideoPageOption) {
+    setSubmitStatus(`已选择 P${page.page}，正在创建任务...`);
+    if (!multiPageProbeVideo) {
+      throw new Error("当前视频信息已失效，请重新探测。");
+    }
+    setProbePreview(multiPageProbeVideo);
+    await api.createVideoTask(multiPageProbeVideo.video_id, { page_number: page.page });
+    setMultiPageDialogOpen(false);
+    setMultiPageProbeVideo(null);
+    setMultiPageOptions([]);
+    setProbeUrl("");
+    setSubmitStatus(`P${page.page} 已开始生成摘要`);
+    setRefreshSeed((value) => value + 1);
+    navigate(`/videos/${multiPageProbeVideo.video_id}`);
+  }
+
+  function handleCloseMultiPageDialog() {
+    setMultiPageDialogOpen(false);
+    setMultiPageProbeVideo(null);
+    setMultiPageOptions([]);
   }
 
   const pageMeta = location.pathname.startsWith("/settings")
@@ -384,6 +417,13 @@ export function App() {
         onCheck={handleCheckForUpdates}
         onDownload={handleDownloadUpdate}
         onInstall={handleInstallUpdate}
+      />
+      <MultiPageSelectDialog
+        isOpen={multiPageDialogOpen}
+        video={multiPageProbeVideo}
+        pages={multiPageOptions}
+        onClose={handleCloseMultiPageDialog}
+        onConfirm={handleConfirmMultiPage}
       />
     </div>
   );

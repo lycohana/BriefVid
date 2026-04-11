@@ -10,6 +10,7 @@ from video_sum_service.schemas import (
     TaskEventRecord,
     TaskRecord,
     VideoAssetRecord,
+    VideoPageOptionResponse,
 )
 
 
@@ -30,6 +31,7 @@ class SqliteTaskRepository:
                     source_url TEXT NOT NULL,
                     cover_url TEXT,
                     duration REAL,
+                    page_catalog_json TEXT NOT NULL DEFAULT '[]',
                     latest_task_id TEXT,
                     latest_status TEXT,
                     latest_stage TEXT,
@@ -39,6 +41,7 @@ class SqliteTaskRepository:
                 )
                 """
             )
+            self._ensure_column(cursor, "video_assets", "page_catalog_json", "TEXT NOT NULL DEFAULT '[]'")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -46,6 +49,8 @@ class SqliteTaskRepository:
                     video_id TEXT,
                     status TEXT NOT NULL,
                     task_input_json TEXT NOT NULL,
+                    page_number INTEGER,
+                    page_title TEXT,
                     result_json TEXT,
                     error_code TEXT,
                     error_message TEXT,
@@ -55,6 +60,8 @@ class SqliteTaskRepository:
                 """
             )
             self._ensure_column(cursor, "tasks", "video_id", "TEXT")
+            self._ensure_column(cursor, "tasks", "page_number", "INTEGER")
+            self._ensure_column(cursor, "tasks", "page_title", "TEXT")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS task_results (
@@ -86,27 +93,76 @@ class SqliteTaskRepository:
         if column not in names:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _canonical_family_pattern(self, canonical_id: str) -> tuple[str, str]:
+        base = str(canonical_id or "").split("?", 1)[0]
+        return base, f"{base}?p=%"
+
+    def _consolidate_video_family(self, cursor: sqlite3.Cursor, canonical_id: str) -> tuple[str, str] | None:
+        family, pattern = self._canonical_family_pattern(canonical_id)
+        rows = cursor.execute(
+            """
+            SELECT video_id, canonical_id, created_at, updated_at
+            FROM video_assets
+            WHERE canonical_id = ? OR canonical_id LIKE ?
+            ORDER BY
+                CASE WHEN canonical_id = ? THEN 0 ELSE 1 END,
+                updated_at DESC,
+                created_at ASC
+            """,
+            (family, pattern, family),
+        ).fetchall()
+        if not rows:
+            return None
+
+        primary = rows[0]
+        primary_video_id = primary["video_id"]
+        created_at = primary["created_at"]
+
+        if primary["canonical_id"] != family:
+            cursor.execute(
+                "UPDATE video_assets SET canonical_id = ? WHERE video_id = ?",
+                (family, primary_video_id),
+            )
+
+        duplicate_ids = [row["video_id"] for row in rows[1:]]
+        for duplicate_id in duplicate_ids:
+            cursor.execute(
+                "UPDATE tasks SET video_id = ? WHERE video_id = ?",
+                (primary_video_id, duplicate_id),
+            )
+            cursor.execute("DELETE FROM video_assets WHERE video_id = ?", (duplicate_id,))
+
+        return primary_video_id, created_at
+
     def upsert_video_asset(self, asset: VideoAssetRecord) -> VideoAssetRecord:
         updated_at = datetime.now(timezone.utc).isoformat()
         created_at = asset.created_at.isoformat()
         with self._lock, sqlite_cursor(self._connection) as cursor:
+            consolidated = self._consolidate_video_family(cursor, asset.canonical_id)
             existing = cursor.execute(
                 "SELECT video_id, created_at FROM video_assets WHERE canonical_id = ?",
                 (asset.canonical_id,),
             ).fetchone()
-            video_id = existing["video_id"] if existing is not None else asset.video_id
-            created = existing["created_at"] if existing is not None else created_at
+            if existing is not None:
+                video_id = existing["video_id"]
+                created = existing["created_at"]
+            elif consolidated is not None:
+                video_id, created = consolidated
+            else:
+                video_id = asset.video_id
+                created = created_at
             cursor.execute(
                 """
                 INSERT INTO video_assets (
-                    video_id, canonical_id, platform, title, source_url, cover_url, duration,
+                    video_id, canonical_id, platform, title, source_url, cover_url, duration, page_catalog_json,
                     latest_task_id, latest_status, latest_stage, latest_error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(canonical_id) DO UPDATE SET
                     title = excluded.title,
                     source_url = excluded.source_url,
                     cover_url = excluded.cover_url,
                     duration = excluded.duration,
+                    page_catalog_json = excluded.page_catalog_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -117,6 +173,7 @@ class SqliteTaskRepository:
                     asset.source_url,
                     asset.cover_url,
                     asset.duration,
+                    json.dumps([page.model_dump(mode="json") for page in asset.pages], ensure_ascii=False),
                     asset.latest_task_id,
                     asset.latest_status.value if asset.latest_status else None,
                     asset.latest_stage,
@@ -135,6 +192,7 @@ class SqliteTaskRepository:
                 """
                 SELECT
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
+                    v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
@@ -151,6 +209,7 @@ class SqliteTaskRepository:
                 """
                 SELECT
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
+                    v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
@@ -167,6 +226,7 @@ class SqliteTaskRepository:
                 """
                 SELECT
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
+                    v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
@@ -174,24 +234,50 @@ class SqliteTaskRepository:
                 ORDER BY v.updated_at DESC
                 """
             ).fetchall()
-        return [self._row_to_video_asset(row) for row in rows]
+        videos = [self._row_to_video_asset(row) for row in rows]
+        grouped: dict[str, VideoAssetRecord] = {}
+        for video in videos:
+            family, _ = self._canonical_family_pattern(video.canonical_id)
+            current = grouped.get(family)
+            if current is None:
+                grouped[family] = video
+                continue
+            current_updated = current.updated_at.timestamp()
+            video_updated = video.updated_at.timestamp()
+            if video_updated > current_updated or ("?p=" in current.canonical_id and "?p=" not in video.canonical_id):
+                grouped[family] = video
+        return list(grouped.values())
 
-    def create_task(self, task_input: TaskInput, video_id: str | None = None) -> TaskRecord:
-        record = TaskRecord(task_input=task_input, video_id=video_id)
+    def create_task(
+        self,
+        task_input: TaskInput,
+        video_id: str | None = None,
+        *,
+        page_number: int | None = None,
+        page_title: str | None = None,
+    ) -> TaskRecord:
+        record = TaskRecord(
+            task_input=task_input,
+            video_id=video_id,
+            page_number=page_number,
+            page_title=page_title,
+        )
         payload = self._serialize_record(record)
         with self._lock, sqlite_cursor(self._connection) as cursor:
             cursor.execute(
                 """
                 INSERT INTO tasks (
-                    task_id, video_id, status, task_input_json, result_json, error_code,
+                    task_id, video_id, status, task_input_json, page_number, page_title, result_json, error_code,
                     error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["task_id"],
                     payload["video_id"],
                     payload["status"],
                     payload["task_input_json"],
+                    payload["page_number"],
+                    payload["page_title"],
                     payload["result_json"],
                     payload["error_code"],
                     payload["error_message"],
@@ -215,7 +301,8 @@ class SqliteTaskRepository:
             rows = cursor.execute(
                 """
                 SELECT
-                    t.task_id, t.video_id, t.status, t.task_input_json, r.result_json, t.error_code,
+                    t.task_id, t.video_id, t.status, t.task_input_json, t.page_number, t.page_title,
+                    r.result_json, t.error_code,
                     t.error_message, t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_results r ON r.task_id = t.task_id
@@ -226,17 +313,26 @@ class SqliteTaskRepository:
 
     def list_tasks_for_video(self, video_id: str) -> list[TaskRecord]:
         with self._lock, sqlite_cursor(self._connection) as cursor:
+            asset_row = cursor.execute(
+                "SELECT canonical_id FROM video_assets WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+            if asset_row is None:
+                return []
+            family, pattern = self._canonical_family_pattern(asset_row["canonical_id"])
             rows = cursor.execute(
                 """
                 SELECT
-                    t.task_id, t.video_id, t.status, t.task_input_json, r.result_json, t.error_code,
+                    t.task_id, t.video_id, t.status, t.task_input_json, t.page_number, t.page_title,
+                    r.result_json, t.error_code,
                     t.error_message, t.created_at, t.updated_at
                 FROM tasks t
+                JOIN video_assets v ON v.video_id = t.video_id
                 LEFT JOIN task_results r ON r.task_id = t.task_id
-                WHERE t.video_id = ?
+                WHERE v.canonical_id = ? OR v.canonical_id LIKE ?
                 ORDER BY t.created_at DESC
                 """,
-                (video_id,),
+                (family, pattern),
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
@@ -245,7 +341,8 @@ class SqliteTaskRepository:
             row = cursor.execute(
                 """
                 SELECT
-                    t.task_id, t.video_id, t.status, t.task_input_json, r.result_json, t.error_code,
+                    t.task_id, t.video_id, t.status, t.task_input_json, t.page_number, t.page_title,
+                    r.result_json, t.error_code,
                     t.error_message, t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_results r ON r.task_id = t.task_id
@@ -305,23 +402,31 @@ class SqliteTaskRepository:
     def delete_video_asset(self, video_id: str) -> bool:
         with self._lock, sqlite_cursor(self._connection) as cursor:
             video_row = cursor.execute(
-                "SELECT cover_url FROM video_assets WHERE video_id = ?",
+                "SELECT canonical_id, cover_url FROM video_assets WHERE video_id = ?",
                 (video_id,),
             ).fetchone()
             if video_row is None:
                 return False
 
+            family, pattern = self._canonical_family_pattern(video_row["canonical_id"])
+            family_rows = cursor.execute(
+                "SELECT video_id FROM video_assets WHERE canonical_id = ? OR canonical_id LIKE ?",
+                (family, pattern),
+            ).fetchall()
+            video_ids = [row["video_id"] for row in family_rows]
+
+            placeholders = ",".join("?" for _ in video_ids)
             task_rows = cursor.execute(
-                "SELECT task_id FROM tasks WHERE video_id = ?",
-                (video_id,),
+                f"SELECT task_id FROM tasks WHERE video_id IN ({placeholders})",
+                tuple(video_ids),
             ).fetchall()
             task_ids = [row["task_id"] for row in task_rows]
 
             for task_id in task_ids:
                 cursor.execute("DELETE FROM task_events WHERE task_id = ?", (task_id,))
                 cursor.execute("DELETE FROM task_results WHERE task_id = ?", (task_id,))
-            cursor.execute("DELETE FROM tasks WHERE video_id = ?", (video_id,))
-            cursor.execute("DELETE FROM video_assets WHERE video_id = ?", (video_id,))
+            cursor.execute(f"DELETE FROM tasks WHERE video_id IN ({placeholders})", tuple(video_ids))
+            cursor.execute(f"DELETE FROM video_assets WHERE video_id IN ({placeholders})", tuple(video_ids))
 
         cover_url = video_row["cover_url"] if video_row is not None else ""
         if cover_url and str(cover_url).startswith("/media/covers/"):
@@ -492,6 +597,8 @@ class SqliteTaskRepository:
             "video_id": record.video_id,
             "status": record.status.value,
             "task_input_json": json.dumps(record.task_input.model_dump(mode="json"), ensure_ascii=False),
+            "page_number": str(record.page_number) if record.page_number is not None else None,
+            "page_title": record.page_title,
             "result_json": (
                 json.dumps(record.result.model_dump(mode="json"), ensure_ascii=False)
                 if record.result is not None
@@ -511,6 +618,8 @@ class SqliteTaskRepository:
             video_id=row["video_id"],
             status=TaskStatus(row["status"]),
             task_input=task_input,
+            page_number=row["page_number"],
+            page_title=row["page_title"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             result=result,
@@ -532,6 +641,10 @@ class SqliteTaskRepository:
             source_url=row["source_url"],
             cover_url=row["cover_url"] or "",
             duration=row["duration"],
+            pages=[
+                VideoPageOptionResponse.model_validate(item)
+                for item in json.loads(row["page_catalog_json"] or "[]")
+            ],
             latest_task_id=row["latest_task_id"],
             latest_status=TaskStatus(row["latest_status"]) if row["latest_status"] else None,
             latest_stage=row["latest_stage"],

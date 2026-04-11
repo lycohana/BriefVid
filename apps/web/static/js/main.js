@@ -221,7 +221,32 @@ async function handleProbeSubmit(event) {
   state.submitStatus = "正在抓取视频信息并准备开始总结...";
   render({ regions: ["intake"] });
   try {
-    const response = await api.probeVideo({ url, force_refresh: false });
+    let response = await api.probeVideo({ url, force_refresh: false });
+    if (response.requires_selection && Array.isArray(response.pages) && response.pages.length > 0) {
+      const pageChoices = response.pages.map((item) => `P${item.page}: ${item.title}`).join("\n");
+      const selected = window.prompt(`检测到多 P 视频，请输入要解析的 P 编号：\n${pageChoices}`, String(response.pages[0].page));
+      if (!selected) {
+        state.submitStatus = "已取消解析";
+        render({ regions: ["intake"] });
+        return;
+      }
+      const selectedPage = response.pages.find((item) => String(item.page) === selected.trim());
+      if (!selectedPage) {
+        state.submitStatus = "输入的 P 编号无效";
+        render({ regions: ["intake"] });
+        return;
+      }
+      state.submitStatus = `已选择 P${selectedPage.page}，正在创建任务...`;
+      render({ regions: ["intake"] });
+      state.probePreview = response.video;
+      state.selectedVideoId = response.video.video_id;
+      navigateTo(`/videos/${response.video.video_id}`);
+      const created = await api.createVideoTask(response.video.video_id, { page_number: selectedPage.page });
+      state.selectedTaskId = created.task_id;
+      state.submitStatus = `P${selectedPage.page} 已开始生成摘要`;
+      await refreshApp({ fullView: true });
+      return;
+    }
     state.probePreview = response.video;
     state.selectedVideoId = response.video.video_id;
     navigateTo(`/videos/${response.video.video_id}`);

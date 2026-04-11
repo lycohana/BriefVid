@@ -152,6 +152,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [taskPanelState, setTaskPanelState] = useState<TaskPanelState>("collapsed");
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [status, setStatus] = useState("");
+  const [selectedPageNumber, setSelectedPageNumber] = useState<number | null>(null);
   const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
   const lastAutoRefreshEventRef = useRef<string | null>(null);
   const taskPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -318,16 +319,26 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     setTaskPanelState("collapsed");
     setActionMenuOpen(false);
     setStatus("");
+    setSelectedPageNumber(null);
     void refreshDetail({ preferredTaskId: null }).catch(() => undefined);
   }, [videoId]);
 
   const orderedTasks = useMemo(() => [...tasks].sort(compareTasksByRecent), [tasks]);
-  const latestTaskId = orderedTasks[0]?.task_id ?? null;
-  const latestTaskSummary = orderedTasks[0] ?? null;
+  const availablePages = video?.pages ?? [];
+  const effectivePageNumber = selectedPageNumber ?? availablePages[0]?.page ?? null;
+  const currentPage = availablePages.find((page) => page.page === effectivePageNumber) ?? null;
+  const pageTasks = useMemo(() => {
+    if (!availablePages.length || effectivePageNumber == null) {
+      return orderedTasks;
+    }
+    return orderedTasks.filter((task) => (task.page_number ?? 1) === effectivePageNumber);
+  }, [availablePages.length, effectivePageNumber, orderedTasks]);
+  const latestTaskId = pageTasks[0]?.task_id ?? null;
+  const latestTaskSummary = pageTasks[0] ?? null;
   const latestTaskContext = latestTaskId ? taskContexts[latestTaskId] ?? null : null;
   const latestTaskDetail = latestTaskContext?.detail ?? null;
   const latestEvents = latestTaskContext?.events ?? [];
-  const selectedTaskSummary = orderedTasks.find((task) => task.task_id === selectedTaskId) ?? null;
+  const selectedTaskSummary = pageTasks.find((task) => task.task_id === selectedTaskId) ?? null;
   const selectedTaskContext = selectedTaskId ? taskContexts[selectedTaskId] ?? null : null;
   const selectedTaskDetail = selectedTaskContext?.detail ?? null;
   const isViewingLatest = Boolean(selectedTaskId && latestTaskId && selectedTaskId === latestTaskId);
@@ -339,6 +350,32 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   useEffect(() => {
     lastAutoRefreshEventRef.current = null;
   }, [latestTaskId]);
+
+  useEffect(() => {
+    if (!availablePages.length) {
+      if (selectedPageNumber !== null) {
+        setSelectedPageNumber(null);
+      }
+      return;
+    }
+    if (selectedPageNumber && availablePages.some((page) => page.page === selectedPageNumber)) {
+      return;
+    }
+    const preferredPage = orderedTasks.find((task) => task.page_number != null)?.page_number ?? availablePages[0]?.page ?? null;
+    setSelectedPageNumber(preferredPage);
+  }, [availablePages, orderedTasks, selectedPageNumber]);
+
+  useEffect(() => {
+    const nextSelectedTaskId = pickDetailTaskId(pageTasks, selectedTaskIdRef.current);
+    if (nextSelectedTaskId === selectedTaskIdRef.current) {
+      return;
+    }
+    selectedTaskIdRef.current = nextSelectedTaskId;
+    setSelectedTaskId(nextSelectedTaskId);
+    if (nextSelectedTaskId) {
+      void ensureTaskContext(nextSelectedTaskId).catch(() => undefined);
+    }
+  }, [pageTasks]);
 
   useEffect(() => {
     if (!latestTaskId) {
@@ -519,9 +556,9 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
         : "已准备";
   const heroStats: HeroStat[] = [
     { id: "progress", label: "最新运行", value: heroProgressSummary },
-    { id: "content", label: "当前查看", value: selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
+    { id: "content", label: "当前查看", value: currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
   ];
-  const bilibiliEmbedBaseUrl = buildBilibiliEmbedUrl(video?.source_url);
+  const bilibiliEmbedBaseUrl = buildBilibiliEmbedUrl(currentPage?.source_url || video?.source_url);
   const bilibiliEmbedUrl = useMemo(() => {
     if (!bilibiliEmbedBaseUrl) {
       return null;
@@ -552,7 +589,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
         </div>
 
         <article className="video-detail-hero">
-          <a className="video-detail-cover" href={video.source_url} target="_blank" rel="noreferrer">
+          <a className="video-detail-cover" href={currentPage?.source_url || video.source_url} target="_blank" rel="noreferrer">
             {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
             <div className="video-detail-cover-overlay">
               <IconPlayCircle className="video-detail-play-icon" />
@@ -567,6 +604,22 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
             </div>
 
             <h2 className="video-detail-title">{video.title}</h2>
+            {availablePages.length ? (
+              <div className="detail-page-switcher">
+                <span className="detail-page-switcher-label">当前分 P</span>
+                <select
+                  className="detail-page-select"
+                  value={effectivePageNumber ?? ""}
+                  onChange={(event) => setSelectedPageNumber(Number(event.target.value) || null)}
+                >
+                  {availablePages.map((page) => (
+                    <option key={page.page} value={page.page}>
+                      {`P${page.page} ${page.title}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             <div className="detail-task-float" ref={taskPopoverRef}>
               <div className={`detail-hero-capsule ${taskStatusClass(liveStatus)} ${taskPanelState === "expanded" ? "is-expanded" : ""}`}>
@@ -605,7 +658,10 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                           onClick={async () => {
                             setActionMenuOpen(false);
                             setStatus("正在基于当前版本重新生成摘要...");
-                            await api.resummarizeVideoTask(video.video_id, { task_id: selectedTaskIdRef.current });
+                            await api.resummarizeVideoTask(video.video_id, {
+                              task_id: selectedTaskIdRef.current,
+                              page_number: effectivePageNumber,
+                            });
                             await refreshDetail({ preferredTaskId: null, syncLibrary: true });
                             setStatus("已开始新的摘要生成任务");
                           }}
@@ -625,7 +681,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                           onClick={async () => {
                             setActionMenuOpen(false);
                             setStatus("正在重新转写并生成摘要...");
-                            await api.createVideoTask(video.video_id);
+                            await api.createVideoTask(video.video_id, { page_number: effectivePageNumber });
                             await refreshDetail({ preferredTaskId: null, syncLibrary: true });
                             setStatus("已开始新的转写摘要任务");
                           }}
@@ -790,7 +846,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                           </section>
                         </div>
                       ) : (
-                        <div className="empty-placeholder">当前视频还没有处理任务。</div>
+                          <div className="empty-placeholder">当前分 P 还没有处理任务。</div>
                       )}
                     </article>
 
@@ -801,12 +857,12 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                             <span className="detail-task-section-kicker">版本列表</span>
                             <h3>内容版本</h3>
                           </div>
-                          <span className="detail-task-section-count">{orderedTasks.length}</span>
+                          <span className="detail-task-section-count">{pageTasks.length}</span>
                         </div>
 
-                        {orderedTasks.length ? (
+                        {pageTasks.length ? (
                           <div className="detail-history-list">
-                            {orderedTasks.map((task) => {
+                            {pageTasks.map((task) => {
                               const isSelected = task.task_id === selectedTaskId;
                               const isLatestTask = task.task_id === latestTaskId;
                               return (
@@ -822,6 +878,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                         <span className={`task-status ${taskStatusClass(task.status)}`}>{taskStatusLabel(task.status)}</span>
                                         {isLatestTask ? <span className="helper-chip">最新任务</span> : null}
                                         {isSelected ? <span className="helper-chip status-success">当前查看</span> : null}
+                                        {task.page_number ? <span className="helper-chip">P{task.page_number}</span> : null}
                                       </div>
                                       <strong>{task.title || video.title}</strong>
                                       <small>{formatDateTime(task.created_at)}</small>
@@ -835,7 +892,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                             })}
                           </div>
                         ) : (
-                          <div className="empty-placeholder">当前视频还没有可切换的内容版本。</div>
+                          <div className="empty-placeholder">当前分 P 还没有可切换的内容版本。</div>
                         )}
                       </article>
 
@@ -993,7 +1050,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                         <div className="detail-overview-player" ref={playerFrameRef}>
                           <div className="detail-section-heading">
                             <h3 className="detail-section-label">Player</h3>
-                            <a className="detail-section-meta detail-section-link" href={video.source_url} target="_blank" rel="noreferrer">在 Bilibili 打开</a>
+                            <a className="detail-section-meta detail-section-link" href={currentPage?.source_url || video.source_url} target="_blank" rel="noreferrer">在 Bilibili 打开</a>
                           </div>
                           <div className="detail-video-embed-frame">
                             <iframe
