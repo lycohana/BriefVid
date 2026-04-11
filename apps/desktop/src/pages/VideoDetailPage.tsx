@@ -3,11 +3,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
 import { api } from "../api";
+import { MarkdownContent } from "../components/MarkdownContent";
 import {
   buildKnowledgeCards,
   describeMindMapPlaceholder,
   describeTaskContentState,
   pickDetailTaskId,
+  resolveKnowledgeNoteMarkdown,
   type DetailTab,
   type KnowledgeCard,
   type TaskPanelState,
@@ -51,7 +53,7 @@ type PlayerSeekTarget = {
 
 const detailTabs: Array<{ id: DetailTab; label: string; description: string }> = [
   { id: "knowledge", label: "知识卡片", description: "按概览、要点、章节整理当前任务结果。" },
-  { id: "summary", label: "摘要结果", description: "查看当前任务的原始摘要、时间轴和全文转写。" },
+  { id: "summary", label: "知识笔记", description: "查看当前任务的完整笔记、重点展开和转写全文。" },
   { id: "mindmap", label: "思维导图", description: "预留按主题组织的知识结构视图入口。" },
 ];
 
@@ -531,8 +533,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const overviewCard = knowledgeCards.find((item) => item.kind === "overview") ?? null;
   const keyPointCards = knowledgeCards.filter((item) => item.kind === "key-point");
   const chapterCards = knowledgeCards.filter((item) => item.kind === "chapter");
-  const selectedKeyPoints = selectedResult?.key_points ?? [];
-  const selectedTimeline = selectedResult?.timeline ?? [];
+  const selectedKnowledgeNoteMarkdown = useMemo(() => resolveKnowledgeNoteMarkdown(selectedResult), [selectedResult]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
   const liveStatus = latestTaskDetail?.status ?? latestTaskSummary?.status ?? video?.latest_status;
   const liveMessage = latestTaskLoadError
@@ -1057,7 +1058,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                         {overviewCard?.meta ? <span className="detail-section-meta">{overviewCard.meta}</span> : null}
                       </div>
                       <h4 className="detail-section-title">{overviewCard?.title || "核心概览"}</h4>
-                      <p className="detail-section-body">{overviewCard?.content || "当前任务还没有生成核心概览。"}</p>
+                      {overviewCard?.content ? <MarkdownContent className="detail-section-body markdown-content-body" compact content={overviewCard.content} /> : <p className="detail-section-body">当前任务还没有生成核心概览。</p>}
                       {bilibiliEmbedUrl ? (
                         <div className="detail-overview-player" ref={playerFrameRef}>
                           <div className="detail-section-heading">
@@ -1127,55 +1128,21 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                 <section className="detail-tab-panel">
                   <section className="detail-content-section">
                     <div className="detail-section-heading">
-                      <h3 className="detail-section-label">Summary</h3>
-                      <span className="detail-section-meta">可信结果视图</span>
+                      <h3 className="detail-section-label">Knowledge Note</h3>
+                      <span className="detail-section-meta">完整学习视图</span>
                     </div>
-                    <h4 className="detail-section-title">摘要概览</h4>
-                    <p className="detail-section-body">{selectedResult?.overview || "暂无摘要概览。"}</p>
-                  </section>
-
-                  <section className="detail-content-section">
-                    <div className="detail-section-heading">
-                      <h3 className="detail-section-label">Key Points</h3>
-                      <span className="detail-section-meta">{selectedKeyPoints.length} 条</span>
-                    </div>
-                    {selectedKeyPoints.length ? (
-                      <ul className="key-points-list">
-                        {selectedKeyPoints.map((item) => <li key={item}>{item}</li>)}
-                      </ul>
+                    <h4 className="detail-section-title">知识笔记</h4>
+                    {selectedKnowledgeNoteMarkdown ? (
+                      <MarkdownContent className="detail-note-markdown" content={selectedKnowledgeNoteMarkdown} />
                     ) : (
-                      <div className="empty-placeholder">当前任务还没有关键要点。</div>
+                      <p className="detail-section-body">当前任务还没有生成知识笔记。</p>
                     )}
                   </section>
 
                   <section className="detail-content-section">
-                    <div className="detail-section-heading">
-                      <h3 className="detail-section-label">Timeline</h3>
-                      <span className="detail-section-meta">{selectedTimeline.length} 段</span>
-                    </div>
-                    {selectedTimeline.length ? (
-                      <div className="timeline-list">
-                        {selectedTimeline.map((item, index) => (
-                          <article className="timeline-item-simple" key={`${item.title}-${index}`}>
-                            <div className="timeline-time-badge">
-                              <IconClock className="timeline-time-icon" />
-                              {formatDuration(item.start ?? 0)}
-                            </div>
-                            <div className="timeline-content-simple">
-                              <h4>{item.title || "章节"}</h4>
-                              <p>{item.summary || ""}</p>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="empty-placeholder">当前任务还没有时间轴。</div>
-                    )}
-                  </section>
-
-                  <section className="detail-content-section detail-content-section-last">
                     <div className="detail-section-heading">
                       <h3 className="detail-section-label">Transcript</h3>
+                      <span className="detail-section-meta">{selectedTranscript ? "原始转写" : "暂无内容"}</span>
                     </div>
                     <pre className="transcript-full">{selectedTranscript || "暂无转写全文。"}</pre>
                   </section>
@@ -1236,7 +1203,7 @@ function KnowledgeCardBlock({
           <span className="detail-card-index">{String(index + 1).padStart(2, "0")}</span>
         </div>
         <h4>{card.title}</h4>
-        <p>{card.content}</p>
+        <MarkdownContent className="detail-card-markdown" compact content={card.content} />
         <div className="detail-card-link">
           查看片段
           <IconArrowRight className="detail-inline-icon" />
@@ -1265,7 +1232,7 @@ function KnowledgeCardBlock({
         <h4>{card.title}</h4>
         <span className="detail-card-index">{String(index + 1).padStart(2, "0")}</span>
       </div>
-      <p>{card.content}</p>
+      <MarkdownContent className="detail-card-markdown" compact content={card.content} />
     </article>
   );
 }

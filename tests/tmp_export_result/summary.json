@@ -12,6 +12,7 @@
         "summary": "章节摘要"
       }
     ],
+    "knowledgeNoteMarkdown": "# 测试标题\n\n## 核心概览\n\n概览",
     "llm_prompt_tokens": 123,
     "llm_completion_tokens": 456,
     "llm_total_tokens": 579

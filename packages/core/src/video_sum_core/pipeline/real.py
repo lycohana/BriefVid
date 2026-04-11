@@ -750,6 +750,7 @@ class RealPipelineRunner(PipelineRunner):
             self._build_summary_start_message(),
             {"llm_enabled": self._settings.llm_enabled and bool(self._settings.llm_api_key)},
         )
+        used_llm_summary = False
         if self._settings.llm_enabled and self._settings.llm_api_key:
             emit("summarizing", 91, f"正在请求 LLM：{self._settings.llm_model or '未命名模型'}")
             logger.info(
@@ -761,6 +762,7 @@ class RealPipelineRunner(PipelineRunner):
             )
             try:
                 summary = self._summarize_with_llm(transcript, segments, title, emit)
+                used_llm_summary = True
             except (LLMAuthenticationError, LLMConfigurationError) as exc:
                 logger.warning("llm unavailable, fallback to rule summary reason=%s", exc)
                 emit(
@@ -775,7 +777,39 @@ class RealPipelineRunner(PipelineRunner):
             logger.info("rule summary start transcript_chars=%d segments=%d", len(transcript), len(segments))
             summary = self._summarize_with_rules(transcript, segments, title)
         summary = self._normalize_summary(summary, transcript, segments, title)
-        emit("summarizing", 95, "摘要生成完成")
+        emit("summarizing", 95, "知识卡片摘要生成完成")
+        if used_llm_summary:
+            emit("summarizing", 96, "正在生成知识笔记")
+            try:
+                note_payload = self._generate_knowledge_note_with_llm(
+                    transcript=transcript,
+                    segments=segments,
+                    title=title,
+                    summary=summary,
+                )
+                knowledge_note_markdown = str(note_payload.get("knowledgeNoteMarkdown") or "").strip()
+                if knowledge_note_markdown:
+                    summary["knowledgeNoteMarkdown"] = knowledge_note_markdown
+                summary["llm_prompt_tokens"] = (_safe_int(summary.get("llm_prompt_tokens")) or 0) + (
+                    _safe_int(note_payload.get("llm_prompt_tokens")) or 0
+                )
+                summary["llm_completion_tokens"] = (_safe_int(summary.get("llm_completion_tokens")) or 0) + (
+                    _safe_int(note_payload.get("llm_completion_tokens")) or 0
+                )
+                summary["llm_total_tokens"] = (_safe_int(summary.get("llm_total_tokens")) or 0) + (
+                    _safe_int(note_payload.get("llm_total_tokens")) or 0
+                )
+            except VideoSumError as exc:
+                logger.warning("knowledge note llm generation failed, fallback to local note builder error=%s", exc)
+                emit(
+                    "summarizing",
+                    97,
+                    f"知识笔记生成失败，已回退为本地笔记：{exc}",
+                    {"fallback": "knowledge_note_rules", "reason": str(exc)},
+                )
+            else:
+                emit("summarizing", 98, "知识笔记生成完成")
+        emit("summarizing", 99, "结果整理完成")
         logger.info(
             "summary finished title=%s bullet_points=%d chapters=%d overview_chars=%d",
             title,
@@ -887,7 +921,7 @@ class RealPipelineRunner(PipelineRunner):
             len(aggregate_transcript),
             len(aggregate_segments),
         )
-        merged = self._request_llm_summary(
+        merged = self._request_llm_json(
             base_url=base_url,
             payload=self._build_llm_summary_payload(
                 title=title,
@@ -924,7 +958,7 @@ class RealPipelineRunner(PipelineRunner):
                 len(str(chunk["segments_json"])),
             )
             try:
-                partial = self._request_llm_summary(
+                partial = self._request_llm_json(
                     base_url=base_url,
                     payload=self._build_llm_summary_payload(
                         title=f"{title} - 分块 {chunk_index}",
@@ -946,7 +980,7 @@ class RealPipelineRunner(PipelineRunner):
                 )
         raise VideoSumError(str(last_error) if last_error else f"Chunk {chunk_index} failed.")
 
-    def _request_llm_summary(
+    def _request_llm_json(
         self,
         base_url: str,
         payload: dict[str, object],
@@ -969,7 +1003,7 @@ class RealPipelineRunner(PipelineRunner):
                     raise
                 backoff_seconds = min(6.0, 1.5 * (attempt + 1))
                 logger.warning(
-                    "llm summary transport retry model=%s attempt=%d/%d error=%s backoff=%.1fs",
+                    "llm json transport retry model=%s attempt=%d/%d error=%s backoff=%.1fs",
                     self._settings.llm_model,
                     attempt + 1,
                     transport_retry_count + 1,
@@ -984,7 +1018,7 @@ class RealPipelineRunner(PipelineRunner):
         except httpx.HTTPStatusError as exc:
             detail = _extract_response_error_detail(exc.response)
             logger.error(
-                "llm summary request failed status=%s model=%s detail=%s",
+                "llm json request failed status=%s model=%s detail=%s",
                 exc.response.status_code,
                 self._settings.llm_model,
                 detail,
@@ -995,7 +1029,7 @@ class RealPipelineRunner(PipelineRunner):
                     f"LLM API Key 无效、已过期，或当前模型/接口无权限访问（HTTP {status_code}: {detail}）。"
                 ) from exc
             raise VideoSumError(f"LLM request failed with status {status_code}: {detail}") from exc
-        logger.info("llm summary response status=%s model=%s", response.status_code, self._settings.llm_model)
+        logger.info("llm json response status=%s model=%s", response.status_code, self._settings.llm_model)
         response_json = response.json()
         content = response_json["choices"][0]["message"]["content"]
         parsed = self._parse_llm_json_content(content)
@@ -1027,7 +1061,7 @@ class RealPipelineRunner(PipelineRunner):
                     continue
 
         preview = _truncate_text(str(content or "").replace("\r", "\\r").replace("\n", "\\n"), 600)
-        logger.error("llm summary returned invalid json content preview=%s", preview)
+        logger.error("llm json returned invalid content preview=%s", preview)
         raise VideoSumError("LLM returned invalid JSON content.")
 
     def _build_llm_summary_payload(
@@ -1057,7 +1091,7 @@ class RealPipelineRunner(PipelineRunner):
             if self._settings.summary_system_prompt.strip()
             else (
                 "你是一名严谨、克制、信息密度优先的中文视频内容编辑。"
-                "你的任务不是泛泛总结，而是基于转写和分段信息，产出可以直接用于“知识卡片”和“摘要结果”页面的结构化内容。"
+                "你的任务不是泛泛总结，而是基于转写和分段信息，产出可以直接用于“知识卡片”页面的结构化内容。"
                 "所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。"
                 "You must return valid json only."
             )
@@ -1100,7 +1134,6 @@ class RealPipelineRunner(PipelineRunner):
 - 保持中文自然、清楚、具体，避免官话和营销口吻。
 - 优先保留高价值信息：定义、判断、证据、例子、条件、限制、影响、结论。
 - 如果视频包含多个层次，overview 负责总览，bulletPoints 负责拆出关键结论，chapters 负责还原内容推进。
-- 摘要结果页要比知识卡片更详细，所以 overview 和 chapter.summary 都要写得更完整，而不是只写一句泛泛概括。
 
 输出格式示例：
 {{"title":"","overview":"","bulletPoints":["", "", "", "", ""],"chapters":[{{"title":"","start":0,"summary":""}}]}}
@@ -1129,6 +1162,76 @@ class RealPipelineRunner(PipelineRunner):
             },
         ]
 
+    def _build_knowledge_note_messages(
+        self,
+        title: str,
+        transcript_excerpt: str,
+        segments_excerpt: str,
+        summary_json: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是一名严谨、擅长整理学习型内容的中文知识编辑。"
+                    "你的任务是基于转写、分段和现有结构化摘要，单独产出一篇适合阅读的知识笔记。"
+                    "知识笔记必须比知识卡片更完整，能够承担学习、回顾和查阅任务。"
+                    "所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。"
+                    "You must return valid json only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": self._render_user_prompt_template(
+                    """请阅读下面的视频资料，并输出一个 JSON 对象。
+注意：你必须返回合法的 json 对象，且只返回 json。
+
+目标：
+基于原始转写和结构化摘要，生成一篇适合详情页“知识笔记”阅读视图的 Markdown 笔记。
+
+强约束：
+1. 顶层只允许包含 knowledgeNoteMarkdown 一个字段。
+2. knowledgeNoteMarkdown 必须是一篇完整 Markdown 笔记，不要输出代码围栏包裹整篇内容。
+3. 笔记必须明显区别于知识卡片：
+   - 不要只是把 bulletPoints 改写一遍；
+   - 要有连续叙述、上下文解释、章节展开和重点串联；
+   - 允许引用已有结构化摘要，但必须重新组织为适合阅读的笔记。
+4. 遇到知识类内容时，优先组织为：核心结论、关键概念、推理/方法、章节展开、易错点/限制。
+5. 遇到教程、评论、新闻等非知识类内容时，退化为通用深度笔记：主题概览、关键信息、内容推进、结论/影响。
+6. 只有在原文确实涉及公式、符号、函数、逻辑表达式时才使用 LaTeX：
+   - 行内公式使用 `$...$`
+   - 独立公式使用 `$$...$$`
+   - 不要强行输出数学公式。
+7. 不要照抄转写全文，不要把原始 transcript 直接拼进笔记主体。
+8. 不要补充外部背景，不要编造例子，不要猜测说话者未表达的动机。
+
+写作要求：
+- 标题层级清楚，便于长文阅读。
+- 保留定义、条件、因果、例子、结论、限制、争议等高价值信息。
+- 如果结构化摘要过于简略，应优先参考转写和分段把笔记写得更完整。
+
+输出格式示例：
+{{"knowledgeNoteMarkdown":"# 标题\n\n## 核心结论\n\n..."}}
+
+视频标题：
+{title}
+
+已有结构化摘要：
+{summary_json}
+
+转写节选：
+{transcript_excerpt}
+
+分段数据节选：
+{segments_excerpt}""",
+                    title=title,
+                    transcript_excerpt=transcript_excerpt,
+                    segments_excerpt=segments_excerpt,
+                    summary_json=summary_json,
+                ),
+            },
+        ]
+
     def _ensure_json_keyword_in_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         if any("json" in str(message.get("content") or "").lower() for message in messages):
             return messages
@@ -1146,6 +1249,7 @@ class RealPipelineRunner(PipelineRunner):
         title: str,
         transcript_excerpt: str,
         segments_excerpt: str,
+        summary_json: str = "",
     ) -> str:
         return template.format(
             title=title,
@@ -1153,7 +1257,67 @@ class RealPipelineRunner(PipelineRunner):
             transcript_excerpt=transcript_excerpt,
             segments_json=segments_excerpt,
             segments_excerpt=segments_excerpt,
+            summary_json=summary_json,
         )
+
+    def _build_llm_knowledge_note_payload(
+        self,
+        title: str,
+        transcript_excerpt: str,
+        segments_excerpt: str,
+        summary_json: str,
+    ) -> dict[str, object]:
+        messages = self._build_knowledge_note_messages(title, transcript_excerpt, segments_excerpt, summary_json)
+        messages = self._ensure_json_keyword_in_messages(messages)
+        return {
+            "model": self._settings.llm_model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "enable_thinking": False,
+        }
+
+    def _generate_knowledge_note_with_llm(
+        self,
+        transcript: str,
+        segments: list[dict[str, object]],
+        title: str,
+        summary: dict[str, object],
+    ) -> dict[str, object]:
+        base_url = (self._settings.llm_base_url or "").rstrip("/")
+        if not base_url or not self._settings.llm_model:
+            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+        transcript_excerpt = self._build_transcript_excerpt(transcript)
+        segments_excerpt = self._build_segments_excerpt(segments)
+        summary_json = _truncate_text(
+            json.dumps(
+                {
+                    "title": summary.get("title"),
+                    "overview": summary.get("overview"),
+                    "bulletPoints": summary.get("bulletPoints"),
+                    "chapters": summary.get("chapters"),
+                },
+                ensure_ascii=False,
+            ),
+            2400,
+        )
+        logger.info(
+            "llm knowledge note request model=%s transcript_chars=%d segments=%d summary_chars=%d",
+            self._settings.llm_model,
+            len(transcript_excerpt),
+            len(segments),
+            len(summary_json),
+        )
+        payload = self._build_llm_knowledge_note_payload(
+            title=title,
+            transcript_excerpt=transcript_excerpt,
+            segments_excerpt=segments_excerpt,
+            summary_json=summary_json,
+        )
+        result = self._request_llm_json(base_url=base_url, payload=payload)
+        result.setdefault("knowledgeNoteMarkdown", "")
+        if not str(result.get("knowledgeNoteMarkdown") or "").strip():
+            raise VideoSumError("LLM returned empty knowledge note markdown.")
+        return result
 
     def _build_summary_chunks(self, segments: list[dict[str, object]]) -> list[dict[str, object]]:
         if not segments:
@@ -1305,6 +1469,13 @@ class RealPipelineRunner(PipelineRunner):
             "overview": overview,
             "bulletPoints": bullet_points,
             "chapters": chapters,
+            "knowledgeNoteMarkdown": self._build_knowledge_note_markdown(
+                title=title or "视频摘要",
+                overview=overview,
+                bullet_points=bullet_points,
+                chapters=chapters,
+                transcript=transcript,
+            ),
         }
 
     def _normalize_summary(
@@ -1331,7 +1502,62 @@ class RealPipelineRunner(PipelineRunner):
         if not chapters:
             chapters = self._build_chapters_fallback(segments)
         normalized["chapters"] = chapters
+
+        knowledge_note_markdown = str(normalized.get("knowledgeNoteMarkdown") or "").strip()
+        if not knowledge_note_markdown:
+            knowledge_note_markdown = self._build_knowledge_note_markdown(
+                title=str(normalized["title"]),
+                overview=overview,
+                bullet_points=bullet_points,
+                chapters=chapters,
+                transcript=transcript,
+            )
+        normalized["knowledgeNoteMarkdown"] = knowledge_note_markdown
         return normalized
+
+    def _build_knowledge_note_markdown(
+        self,
+        title: str,
+        overview: str,
+        bullet_points: list[str],
+        chapters: list[dict[str, object]],
+        transcript: str,
+    ) -> str:
+        sections: list[str] = [f"# {title or '知识笔记'}"]
+
+        if overview:
+            sections.extend(["", "## 核心概览", "", overview.strip()])
+
+        if bullet_points:
+            sections.extend(["", "## 关键要点", ""])
+            sections.extend(f"- {point.strip()}" for point in bullet_points if point.strip())
+
+        if chapters:
+            sections.extend(["", "## 内容展开"])
+            for index, chapter in enumerate(chapters, start=1):
+                chapter_title = str(chapter.get("title") or f"章节 {index}").strip()
+                chapter_summary = str(chapter.get("summary") or "").strip()
+                start = float(chapter.get("start") or 0)
+                sections.extend(
+                    [
+                        "",
+                        f"### {chapter_title}",
+                        "",
+                        f"- 时间点：{self._format_seconds(start)}",
+                    ]
+                )
+                if chapter_summary:
+                    sections.extend(["", chapter_summary])
+
+        transcript_lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+        if transcript_lines:
+            sections.extend(["", "## 原文摘录", ""])
+            excerpt = transcript_lines[:6]
+            sections.extend(f"> {line}" for line in excerpt)
+            if len(transcript_lines) > len(excerpt):
+                sections.extend(["", "> ..."])
+
+        return "\n".join(sections).strip()
 
     def _build_overview_fallback(self, transcript: str) -> str:
         lines = [line.strip() for line in transcript.splitlines() if line.strip()]
@@ -1429,18 +1655,23 @@ class RealPipelineRunner(PipelineRunner):
     ) -> TaskResult:
         transcript_path = task_dir / "transcript.txt"
         summary_path = task_dir / "summary.json"
+        knowledge_note_path = task_dir / "knowledge_note.md"
+        knowledge_note_markdown = str(summary.get("knowledgeNoteMarkdown") or "").strip()
         transcript_path.write_text(transcript, encoding="utf-8")
         summary_path.write_text(
             json.dumps({"title": title, "summary": summary, "segments": segments}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        knowledge_note_path.write_text(knowledge_note_markdown, encoding="utf-8")
         logger.info(
-            "result exported transcript_path=%s summary_path=%s",
+            "result exported transcript_path=%s summary_path=%s knowledge_note_path=%s",
             transcript_path,
             summary_path,
+            knowledge_note_path,
         )
         return TaskResult(
             overview=str(summary.get("overview") or ""),
+            knowledge_note_markdown=knowledge_note_markdown,
             transcript_text=transcript,
             segment_summaries=[str(item["summary"]) for item in summary.get("chapters", [])],
             key_points=[str(item) for item in summary.get("bulletPoints", [])],
@@ -1455,6 +1686,7 @@ class RealPipelineRunner(PipelineRunner):
             artifacts={
                 "transcript_path": str(transcript_path),
                 "summary_path": str(summary_path),
+                "knowledge_note_path": str(knowledge_note_path),
             },
             llm_prompt_tokens=_safe_int(summary.get("llm_prompt_tokens")),
             llm_completion_tokens=_safe_int(summary.get("llm_completion_tokens")),

@@ -8,6 +8,7 @@ export type TimelineItem = {
 
 export type TaskResult = {
   overview: string;
+  knowledge_note_markdown?: string;
   transcript_text: string;
   segment_summaries: string[];
   key_points: string[];

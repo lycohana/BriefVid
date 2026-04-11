@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { buildKnowledgeCards, describeMindMapPlaceholder, describeTaskContentState, pickDetailTaskId } from "../src/detailModel.ts";
+import { buildKnowledgeCards, describeMindMapPlaceholder, describeTaskContentState, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
 import type { TaskDetail, TaskResult, TaskSummary } from "../src/types.ts";
 
 function run(name: string, fn: () => void) {
@@ -27,6 +27,7 @@ function createTaskSummary(overrides: Partial<TaskSummary>): TaskSummary {
 function createTaskResult(overrides: Partial<TaskResult> = {}): TaskResult {
   return {
     overview: "这是一段概览。",
+    knowledge_note_markdown: "",
     transcript_text: "逐字稿内容",
     segment_summaries: ["片段摘要一", "片段摘要二"],
     key_points: ["要点一", "要点二"],
@@ -98,6 +99,7 @@ run("uses segment summaries as chapter cards when timeline is missing", () => {
 run("tolerates legacy results with missing array fields", () => {
   const cards = buildKnowledgeCards({
     overview: "旧数据概览",
+    knowledge_note_markdown: "",
     transcript_text: "旧数据逐字稿",
     key_points: undefined as unknown as string[],
     timeline: undefined as unknown as TaskResult["timeline"],
@@ -108,6 +110,20 @@ run("tolerates legacy results with missing array fields", () => {
   assert.equal(cards.filter((item) => item.kind === "overview").length, 1);
   assert.equal(cards.filter((item) => item.kind === "key-point").length, 0);
   assert.equal(cards.filter((item) => item.kind === "chapter").length, 0);
+});
+
+run("prefers explicit knowledge note markdown when available", () => {
+  const markdown = resolveKnowledgeNoteMarkdown(createTaskResult({ knowledge_note_markdown: "# 知识笔记\n\n公式 $f(x)$" }));
+
+  assert.equal(markdown, "# 知识笔记\n\n公式 $f(x)$");
+});
+
+run("builds legacy knowledge note markdown from existing result fields", () => {
+  const markdown = resolveKnowledgeNoteMarkdown(createTaskResult({ knowledge_note_markdown: "" }));
+
+  assert.match(markdown, /## 摘要概览/);
+  assert.match(markdown, /## 关键要点/);
+  assert.match(markdown, /### 章节一/);
 });
 
 run("describes a pending workspace state when the selected task is still running", () => {

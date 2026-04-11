@@ -104,6 +104,57 @@ export function buildKnowledgeCards(result?: TaskResult | null): KnowledgeCard[]
   return cards;
 }
 
+export function resolveKnowledgeNoteMarkdown(result?: TaskResult | null): string {
+  if (!result) {
+    return "";
+  }
+
+  const directMarkdown = String(result.knowledge_note_markdown || "").trim();
+  if (directMarkdown) {
+    return directMarkdown;
+  }
+
+  const sections: string[] = [];
+  const overview = String(result.overview || "").trim();
+  const keyPoints = Array.isArray(result.key_points) ? result.key_points.map((item) => item.trim()).filter(Boolean) : [];
+  const timeline = Array.isArray(result.timeline) ? result.timeline : [];
+
+  if (overview) {
+    sections.push("## 摘要概览", "", overview);
+  }
+
+  if (keyPoints.length) {
+    sections.push("", "## 关键要点", "");
+    sections.push(...keyPoints.map((item) => `- ${item}`));
+  }
+
+  if (timeline.length) {
+    sections.push("", "## 时间轴", "");
+    timeline.forEach((item, index) => {
+      const title = String(item.title || "").trim() || `章节 ${index + 1}`;
+      const summary = String(item.summary || "").trim();
+      const start = typeof item.start === "number" ? item.start : null;
+      sections.push(`### ${title}`);
+      if (start != null) {
+        sections.push("", `- 时间点：${formatMarkdownDuration(start)}`);
+      }
+      if (summary) {
+        sections.push("", summary);
+      }
+      sections.push("");
+    });
+  }
+
+  return sections.join("\n").trim();
+}
+
+function formatMarkdownDuration(totalSeconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 export function describeTaskContentState(task?: Pick<TaskDetail, "status" | "result" | "error_message"> | null): TaskContentState | null {
   if (task?.result) {
     return null;

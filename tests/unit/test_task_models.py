@@ -142,6 +142,7 @@ def test_real_pipeline_builds_strict_summary_prompt() -> None:
     assert "bulletPoints 必须是 5 到 8 条中文要点" in messages[1]["content"]
     assert "chapters 必须是 4 到 8 个章节" in messages[1]["content"]
     assert "每条都要能单独成为一张知识卡片" in messages[1]["content"]
+    assert "knowledgeNoteMarkdown" not in messages[1]["content"]
 
 
 def test_real_pipeline_uses_custom_prompt_template() -> None:
@@ -161,6 +162,22 @@ def test_real_pipeline_uses_custom_prompt_template() -> None:
     assert "分段=分段内容" in messages[1]["content"]
 
 
+def test_real_pipeline_builds_separate_knowledge_note_prompt() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    messages = runner._build_knowledge_note_messages(
+        "测试标题",
+        "转写内容",
+        "分段内容",
+        '{"overview":"概览","bulletPoints":["要点一"]}',
+    )
+
+    assert len(messages) == 2
+    assert "knowledgeNoteMarkdown" in messages[1]["content"]
+    assert "不要只是把 bulletPoints 改写一遍" in messages[1]["content"]
+    assert "已有结构化摘要" in messages[1]["content"]
+
+
 def test_llm_payload_forces_json_keyword_when_custom_prompts_miss_it() -> None:
     runner = RealPipelineRunner(
         PipelineSettings(
@@ -171,6 +188,15 @@ def test_llm_payload_forces_json_keyword_when_custom_prompts_miss_it() -> None:
     )
 
     payload = runner._build_llm_summary_payload("测试标题", "转写内容", "分段内容")
+    contents = "\n".join(str(message.get("content") or "") for message in payload["messages"])
+
+    assert "json" in contents.lower()
+
+
+def test_knowledge_note_payload_forces_json_keyword() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    payload = runner._build_llm_knowledge_note_payload("测试标题", "转写内容", "分段内容", '{"overview":"概览"}')
     contents = "\n".join(str(message.get("content") or "") for message in payload["messages"])
 
     assert "json" in contents.lower()
@@ -190,6 +216,7 @@ def test_export_result_preserves_llm_usage() -> None:
             "overview": "概览",
             "bulletPoints": ["要点一"],
             "chapters": [{"title": "章节 1", "start": 0.0, "summary": "章节摘要"}],
+            "knowledgeNoteMarkdown": "# 测试标题\n\n## 核心概览\n\n概览",
             "llm_prompt_tokens": 123,
             "llm_completion_tokens": 456,
             "llm_total_tokens": 579,
@@ -199,6 +226,8 @@ def test_export_result_preserves_llm_usage() -> None:
     assert result.llm_prompt_tokens == 123
     assert result.llm_completion_tokens == 456
     assert result.llm_total_tokens == 579
+    assert result.knowledge_note_markdown.startswith("# 测试标题")
+    assert result.artifacts["knowledge_note_path"].endswith("knowledge_note.md")
 
 
 def test_build_summary_chunks_splits_large_segments() -> None:
@@ -266,3 +295,23 @@ def test_parse_llm_json_content_accepts_control_characters_with_strict_false() -
     )
 
     assert "第一行" in parsed["overview"]
+
+
+def test_real_pipeline_builds_knowledge_note_markdown_fallback() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    summary = runner._normalize_summary(
+        {
+            "title": "高数笔记",
+            "overview": "这里解释极限的核心思路。",
+            "bulletPoints": ["先固定变量，再讨论趋近过程。"],
+            "chapters": [{"title": "定义", "start": 0.0, "summary": "介绍极限定义与阅读方式。"}],
+        },
+        "第一行转写\n第二行转写",
+        [{"start": 0.0, "end": 1.0, "text": "介绍极限定义"}],
+        "高数笔记",
+    )
+
+    assert summary["knowledgeNoteMarkdown"]
+    assert "## 核心概览" in str(summary["knowledgeNoteMarkdown"])
+    assert "### 定义" in str(summary["knowledgeNoteMarkdown"])
