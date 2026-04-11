@@ -427,16 +427,6 @@ class SqliteTaskRepository:
                 cursor.execute("DELETE FROM task_results WHERE task_id = ?", (task_id,))
             cursor.execute(f"DELETE FROM tasks WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM video_assets WHERE video_id IN ({placeholders})", tuple(video_ids))
-
-        cover_url = video_row["cover_url"] if video_row is not None else ""
-        if cover_url and str(cover_url).startswith("/media/covers/"):
-            try:
-                cover_path = Path(str(cover_url).replace("/media/covers/", "", 1))
-                local_cover = Path.cwd() / ".data" / "cache" / "covers" / cover_path.name
-                if local_cover.exists():
-                    local_cover.unlink()
-            except OSError:
-                pass
         return True
 
     def update_status(self, task_id: str, status: TaskStatus) -> TaskRecord | None:

@@ -614,7 +614,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                 >
                   {availablePages.map((page) => (
                     <option key={page.page} value={page.page}>
-                      {`P${page.page} ${page.title}`}
+                      {page.title}
                     </option>
                   ))}
                 </select>

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,7 @@ from video_sum_service.schemas import (
     TaskDetailResponse,
     TaskEventResponse,
     TaskProgressResponse,
+    TaskRecord,
     TaskSummaryResponse,
     VideoAssetDetailResponse,
     VideoAssetRecord,
@@ -510,17 +512,30 @@ def _build_page_canonical_id(base_id: str, page: int) -> str:
     return f"{base_id}?p={page}"
 
 
+def _extract_page_part_from_title(base_title: str, page: int, title: str) -> str:
+    candidate = str(title or "").strip()
+    if not candidate:
+        return ""
+
+    normalized_base = re.sub(r"\s+", " ", base_title).strip()
+    normalized_candidate = re.sub(r"\s+", " ", candidate).strip()
+    if normalized_base and normalized_candidate.startswith(normalized_base):
+        candidate = normalized_candidate[len(normalized_base):].strip(" -_")
+    else:
+        candidate = normalized_candidate
+
+    candidate = re.sub(rf"^[Pp]0*{page}\s*", "", candidate).strip(" -_")
+    candidate = re.sub(rf"^第?\s*0*{page}\s*[Pp]?\s*", "", candidate).strip(" -_")
+    return candidate
+
+
 def _build_page_title(base_title: str, page: int, info: dict[str, object]) -> str:
     part = str(info.get("part") or "").strip()
     title = str(info.get("title") or "").strip()
-    candidate = part or title
+    candidate = part or _extract_page_part_from_title(base_title, page, title)
     if not candidate:
-        return f"{base_title} - P{page}"
-    if candidate == base_title or candidate.startswith(base_title):
-        return candidate
-    if candidate.lower().startswith(f"p{page}"):
-        return candidate
-    return f"{base_title} - P{page} {candidate}"
+        return f"P{page}"
+    return f"P{page} {candidate}"
 
 
 def _extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, object]:
@@ -532,6 +547,37 @@ def _extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, ob
     if not isinstance(info, dict):
         raise HTTPException(status_code=400, detail="无法读取视频信息。")
     return info
+
+
+def _fetch_bilibili_page_catalog(url: str) -> list[dict[str, object]]:
+    try:
+        response = httpx.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.bilibili.com/",
+            },
+            follow_redirects=True,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        logger.warning("failed to fetch bilibili page catalog: %s", url, exc_info=True)
+        return []
+
+    match = re.search(r"__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;\s*\(function", response.text, re.S)
+    if not match:
+        return []
+
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        logger.warning("failed to parse bilibili page catalog payload: %s", url, exc_info=True)
+        return []
+
+    video_data = payload.get("videoData") or {}
+    pages = video_data.get("pages") or []
+    return [item for item in pages if isinstance(item, dict)]
 
 
 def _build_base_video_asset(
@@ -575,10 +621,26 @@ def probe_video_asset(
         if len(flat_entries) > 1:
             top_title = str(flat_info.get("title") or canonical_id or normalized_url)
             top_id = str(flat_info.get("id") or canonical_id or normalized_url)
+            catalog_entries = _fetch_bilibili_page_catalog(normalized_url)
             pages: list[VideoPageOptionResponse] = []
             for index, entry in enumerate(flat_entries, start=1):
                 page_url = str(entry.get("url") or _with_bilibili_page(f"https://www.bilibili.com/video/{canonical_id}", index))
-                page_title = str(entry.get("title") or "").strip() or f"{top_title} - P{index}"
+                catalog_entry = next(
+                    (
+                        item
+                        for item in catalog_entries
+                        if int(item.get("page") or 0) == index
+                    ),
+                    None,
+                )
+                page_title = _build_page_title(
+                    top_title,
+                    index,
+                    {
+                        "part": str((catalog_entry or {}).get("part") or "").strip(),
+                        "title": str(entry.get("title") or "").strip(),
+                    },
+                )
                 pages.append(
                     VideoPageOptionResponse(
                         page=index,
@@ -675,6 +737,45 @@ def localize_video_cover(task_store: SqliteTaskRepository, video: VideoAssetReco
         return video
     updated = video.model_copy(update={"cover_url": localized})
     return task_store.upsert_video_asset(updated)
+
+
+def _task_artifact_directories(tasks: list[TaskRecord], tasks_dir: Path) -> list[Path]:
+    directories: set[Path] = set()
+    for task in tasks:
+        directories.add(tasks_dir / task.task_id)
+        if task.result is None:
+            continue
+        for artifact_path in task.result.artifacts.values():
+            try:
+                path = Path(str(artifact_path))
+            except (TypeError, ValueError):
+                continue
+            directories.add(path.parent)
+    return sorted(directories, key=lambda item: len(item.parts), reverse=True)
+
+
+def _video_cover_paths(video: VideoAssetRecord, cache_dir: Path) -> list[Path]:
+    cover_paths: set[Path] = set()
+    cover_url = str(video.cover_url or "")
+    if cover_url.startswith("/media/covers/"):
+        cover_paths.add(cache_dir / "covers" / Path(cover_url).name)
+    return sorted(cover_paths)
+
+
+def _cleanup_video_files(video: VideoAssetRecord, tasks: list[TaskRecord], current_settings: ServiceSettings) -> None:
+    for directory in _task_artifact_directories(tasks, current_settings.tasks_dir):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=False)
+        except OSError:
+            logger.warning("failed to remove task directory: %s", directory, exc_info=True)
+
+    for cover_path in _video_cover_paths(video, current_settings.cache_dir):
+        try:
+            if cover_path.exists():
+                cover_path.unlink()
+        except OSError:
+            logger.warning("failed to remove cached cover: %s", cover_path, exc_info=True)
 
 
 def load_task_segments(summary_path: str) -> list[dict[str, object]]:
@@ -936,9 +1037,14 @@ def get_video(video_id: str) -> VideoAssetDetailResponse:
 @app.delete("/api/v1/videos/{video_id}")
 def delete_video(video_id: str) -> dict[str, object]:
     task_store: SqliteTaskRepository = app.state.task_repository
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    tasks = task_store.list_tasks_for_video(video_id)
     deleted = task_store.delete_video_asset(video_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Video not found.")
+    _cleanup_video_files(video, tasks, settings_manager.current)
     logger.info("delete video video_id=%s", video_id)
     return {"deleted": True, "video_id": video_id}
 
