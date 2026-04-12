@@ -4976,14 +4976,83 @@ textarea {
   animation: spin 1s linear infinite;
 }
 
+.floating-notice-stack {
+  position: fixed;
+  top: calc(var(--title-bar-height) + 18px);
+  left: 50%;
+  z-index: 1800;
+  display: grid;
+  gap: 10px;
+  width: min(720px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.floating-notice-pill,
 .submit-status,
 .action-status {
-  padding: 12px 16px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--brand-200);
-  background: var(--bg-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--brand-300) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 82%, rgba(255, 255, 255, 0.72) 18%);
   color: var(--brand-700);
-  font-size: 0.9rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 18px 40px rgba(17, 24, 39, 0.12);
+  backdrop-filter: blur(18px) saturate(140%);
+  pointer-events: none;
+  animation: floatingNoticeIn 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.floating-notice-pill.tone-info,
+.submit-status,
+.action-status {
+  border-color: color-mix(in srgb, var(--brand-300) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 80%, var(--bg-accent) 20%);
+  color: var(--brand-700);
+}
+
+.floating-notice-pill.tone-success {
+  border-color: color-mix(in srgb, var(--success-border) 88%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-success) 18%);
+  color: var(--success);
+}
+
+.floating-notice-pill.tone-error {
+  border-color: color-mix(in srgb, var(--danger-border) 88%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-danger) 18%);
+  color: var(--danger);
+}
+
+.floating-notice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 16%, transparent);
+  flex-shrink: 0;
+}
+
+.floating-notice-copy {
+  min-width: 0;
+  font-weight: 600;
+}
+
+@keyframes floatingNoticeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .probe-preview {

@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
 import { api } from "../api";
 import { MarkdownContent } from "../components/MarkdownContent";
+import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import {
   buildChapterGroups,
   buildKnowledgeCards,
@@ -678,11 +679,14 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     setExpandedChapterGroupIds((current) => {
       const visibleGroupIds = new Set(chapterGroups.map((group) => group.id));
       const nextExpanded = current.filter((groupId) => visibleGroupIds.has(groupId));
+      const hasSameExpandedIds = nextExpanded.length === current.length
+        && nextExpanded.every((groupId, index) => groupId === current[index]);
+
       if (chapterGroups.length === 0) {
-        return nextExpanded.length ? [] : nextExpanded;
+        return nextExpanded.length ? [] : current;
       }
       if (nextExpanded.length > 0 || !chapterGroupsChanged) {
-        return nextExpanded;
+        return hasSameExpandedIds ? current : nextExpanded;
       }
       return [chapterGroups[0].id];
     });
@@ -715,6 +719,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
 
   return (
     <section className="video-detail-page">
+      <FloatingNoticeStack notices={[{ id: "video-detail-status", message: status }]} />
       <div className="detail-page-shell">
         <div className="detail-page-toolbar">
           <Link className="detail-back-button" to="/library">
@@ -1130,8 +1135,6 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                 </section>
               ) : null}
             </div>
-
-            {status ? <div className="submit-status">{status}</div> : null}
           </div>
         </article>
 
