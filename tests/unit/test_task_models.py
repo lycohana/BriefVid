@@ -341,7 +341,7 @@ def test_real_pipeline_preserves_latex_and_allows_richer_mindmap_structure() -> 
     assert "\\left|\\frac{1}{n}-0\\right|<\\varepsilon" in mindmap.nodes[0].children[0].children[0].summary
 
 
-def test_clean_title_does_not_cut_inline_formula_in_half() -> None:
+def test_clean_title_drops_formula_when_truncation_would_split_it() -> None:
     runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
 
     cleaned = runner._clean_title(
@@ -349,9 +349,7 @@ def test_clean_title_does_not_cut_inline_formula_in_half() -> None:
     )
 
     assert cleaned.count("$") % 2 == 0
-    assert "\\approx" in cleaned
-    assert "\\Delta x" in cleaned
-    assert len(cleaned) > 24
+    assert cleaned == "核心公式"
 
 
 def test_render_user_prompt_template_preserves_latex_braces() -> None:
