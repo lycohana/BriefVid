@@ -13,6 +13,7 @@ const elements = {
   viewRoot: document.getElementById("view-root"),
 };
 let renderedViewKey = "";
+const transientStatusTimers = new Map();
 
 bootstrap().catch((error) => {
   elements.viewRoot.innerHTML = `<div class="grid-card empty-state">
@@ -51,6 +52,73 @@ function navigateTo(path) {
   if (window.location.pathname === path) return;
   window.history.pushState({}, "", path);
   syncRouteFromLocation();
+}
+
+function inferTransientStatusTone(message) {
+  if (/失败|错误|不可用|未就绪|无效|已取消|关闭/i.test(message)) {
+    return "error";
+  }
+  if (/完成|成功|已保存|已刷新|已开始|已删除|已更新|已复制|已请求/i.test(message)) {
+    return "success";
+  }
+  return "info";
+}
+
+function resolveTransientStatusDuration(message, tone) {
+  if (!message) {
+    return null;
+  }
+  if (/^正在|检测到.+请先|请先选择/i.test(message)) {
+    return null;
+  }
+  return tone === "error" ? 6500 : 4800;
+}
+
+function clearTransientStatus(key, { shouldRender = true } = {}) {
+  const timer = transientStatusTimers.get(key);
+  if (timer) {
+    window.clearTimeout(timer);
+    transientStatusTimers.delete(key);
+  }
+  if (!state[key]) {
+    return;
+  }
+  state[key] = "";
+  if (shouldRender) {
+    render({ fullView: true });
+  }
+}
+
+function setTransientStatus(key, message, { shouldRender = true } = {}) {
+  const nextMessage = String(message || "");
+  const previousMessage = String(state[key] || "");
+  const timer = transientStatusTimers.get(key);
+  if (timer) {
+    window.clearTimeout(timer);
+    transientStatusTimers.delete(key);
+  }
+
+  state[key] = nextMessage;
+
+  if (nextMessage) {
+    const tone = inferTransientStatusTone(nextMessage);
+    const duration = resolveTransientStatusDuration(nextMessage, tone);
+    if (duration != null) {
+      transientStatusTimers.set(key, window.setTimeout(() => {
+        if (state[key] === nextMessage) {
+          state[key] = "";
+          transientStatusTimers.delete(key);
+          render({ fullView: true });
+        }
+      }, duration));
+    }
+  }
+
+  if (shouldRender && previousMessage !== nextMessage) {
+    render({ fullView: true });
+  } else if (shouldRender) {
+    render({ fullView: true });
+  }
 }
 
 function bindNavigation() {
@@ -97,6 +165,14 @@ function bindViewEvents() {
   elements.viewRoot.addEventListener("click", async (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target) return;
+
+    const dismissButton = target.closest("[data-dismiss-status]");
+    if (dismissButton instanceof HTMLElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearTransientStatus(dismissButton.dataset.dismissStatus || "");
+      return;
+    }
 
     const actionNode = target.closest("[data-action]");
     if (actionNode instanceof HTMLElement) {
@@ -214,36 +290,31 @@ async function handleProbeSubmit(event) {
   event.preventDefault();
   const url = document.getElementById("probe-url-input")?.value.trim();
   if (!url) {
-    state.submitStatus = "请输入视频链接";
-    render({ regions: ["intake"] });
+    setTransientStatus("submitStatus", "请输入视频链接");
     return;
   }
-  state.submitStatus = "正在抓取视频信息并准备开始总结...";
-  render({ regions: ["intake"] });
+  setTransientStatus("submitStatus", "正在抓取视频信息并准备开始总结...");
   try {
     let response = await api.probeVideo({ url, force_refresh: false });
     if (response.requires_selection && Array.isArray(response.pages) && response.pages.length > 0) {
       const pageChoices = response.pages.map((item) => `P${item.page}: ${item.title}`).join("\n");
       const selected = window.prompt(`检测到多 P 视频，请输入要解析的 P 编号：\n${pageChoices}`, String(response.pages[0].page));
       if (!selected) {
-        state.submitStatus = "已取消解析";
-        render({ regions: ["intake"] });
+        setTransientStatus("submitStatus", "已取消解析");
         return;
       }
       const selectedPage = response.pages.find((item) => String(item.page) === selected.trim());
       if (!selectedPage) {
-        state.submitStatus = "输入的 P 编号无效";
-        render({ regions: ["intake"] });
+        setTransientStatus("submitStatus", "输入的 P 编号无效");
         return;
       }
-      state.submitStatus = `已选择 P${selectedPage.page}，正在创建任务...`;
-      render({ regions: ["intake"] });
+      setTransientStatus("submitStatus", `已选择 P${selectedPage.page}，正在创建任务...`);
       state.probePreview = response.video;
       state.selectedVideoId = response.video.video_id;
       navigateTo(`/videos/${response.video.video_id}`);
       const created = await api.createVideoTask(response.video.video_id, { page_number: selectedPage.page });
       state.selectedTaskId = created.task_id;
-      state.submitStatus = `P${selectedPage.page} 已开始生成摘要`;
+      setTransientStatus("submitStatus", `P${selectedPage.page} 已开始生成摘要`, { shouldRender: false });
       await refreshApp({ fullView: true });
       return;
     }
@@ -252,11 +323,10 @@ async function handleProbeSubmit(event) {
     navigateTo(`/videos/${response.video.video_id}`);
     const created = await api.createVideoTask(response.video.video_id);
     state.selectedTaskId = created.task_id;
-    state.submitStatus = response.cached ? "已从视频库读取并开始总结" : "视频已加入本地库并开始总结";
+    setTransientStatus("submitStatus", response.cached ? "已从视频库读取并开始总结" : "视频已加入本地库并开始总结", { shouldRender: false });
     await refreshApp({ fullView: true });
   } catch (error) {
-    state.submitStatus = error.message || "开始总结失败";
-    render({ regions: ["intake"] });
+    setTransientStatus("submitStatus", error.message || "开始总结失败");
   }
 }
 
@@ -276,32 +346,28 @@ async function handleVideoAction(action, dataset) {
   }
 
   if (action === "start-task" && dataset.videoId) {
-    state.submitStatus = "正在创建处理任务...";
-    render({ regions: state.page === "video-detail" ? ["hero", "progress"] : ["intake"] });
+    setTransientStatus("submitStatus", "正在创建处理任务...");
     try {
       const created = await api.createVideoTask(dataset.videoId);
       state.selectedTaskId = created.task_id;
       await refreshApp({ fullView: true });
     } catch (error) {
-      state.submitStatus = error.message || "创建任务失败";
-      render({ regions: state.page === "video-detail" ? ["hero", "progress"] : ["intake"] });
+      setTransientStatus("submitStatus", error.message || "创建任务失败");
     }
     return;
   }
 
   if (action === "refresh-video" && dataset.videoUrl) {
-    state.submitStatus = "正在重新获取视频信息...";
-    render({ regions: state.page === "video-detail" ? ["hero"] : ["intake"] });
+    setTransientStatus("submitStatus", "正在重新获取视频信息...");
     try {
       const response = await api.refreshVideo(dataset.videoUrl);
       if (response?.video?.video_id) {
         state.selectedVideoId = response.video.video_id;
       }
-      state.submitStatus = "视频信息已更新";
+      setTransientStatus("submitStatus", "视频信息已更新", { shouldRender: false });
       await refreshApp({ fullView: state.page === "video-detail" });
     } catch (error) {
-      state.submitStatus = error.message || "重新获取视频信息失败";
-      render({ regions: state.page === "video-detail" ? ["hero"] : ["intake"] });
+      setTransientStatus("submitStatus", error.message || "重新获取视频信息失败");
     }
     return;
   }
@@ -324,11 +390,10 @@ async function handleVideoAction(action, dataset) {
         navigateTo("/");
         state.page = "library";
       }
-      state.submitStatus = "视频已删除";
+      setTransientStatus("submitStatus", "视频已删除", { shouldRender: false });
       await refreshApp({ fullView: true });
     } catch (error) {
-      state.submitStatus = error.message || "删除视频失败";
-      render({ regions: state.page === "video-detail" ? ["hero", "history"] : ["intake", "list"] });
+      setTransientStatus("submitStatus", error.message || "删除视频失败");
     }
     return;
   }
@@ -344,8 +409,7 @@ async function handleVideoAction(action, dataset) {
       }
       await refreshApp({ fullView: true });
     } catch (error) {
-      state.submitStatus = error.message || "删除任务失败";
-      render({ regions: state.page === "video-detail" ? ["history", "progress"] : ["intake"] });
+      setTransientStatus("submitStatus", error.message || "删除任务失败");
     }
     return;
   }
@@ -410,48 +474,44 @@ async function handleSettingsSubmit(event) {
     summary_chunk_concurrency: Number(readValue("summary_chunk_concurrency", current.summary_chunk_concurrency || 2)),
     summary_chunk_retry_count: Number(readValue("summary_chunk_retry_count", current.summary_chunk_retry_count || 2)),
   };
-  state.settingsSaveStatus = "正在保存设置...";
-  render({ fullView: true });
+  setTransientStatus("settingsSaveStatus", "正在保存设置...");
   try {
     const response = await api.updateSettings(payload);
     state.settings = response.settings;
-    state.settingsSaveStatus = response.message || "设置已保存";
+    setTransientStatus("settingsSaveStatus", response.message || "设置已保存", { shouldRender: false });
     await refreshApp({ fullView: true });
   } catch (error) {
-    state.settingsSaveStatus = error.message || "设置保存失败";
-    render({ fullView: true });
+    setTransientStatus("settingsSaveStatus", error.message || "设置保存失败");
   }
 }
 
 async function handleRefreshEnvironment() {
-  state.cudaActionStatus = "正在检测本机环境...";
-  render({ fullView: true });
+  setTransientStatus("cudaActionStatus", "正在检测本机环境...");
   try {
     const runtimeChannel = document.getElementById("runtime_channel")?.value || state.settings?.runtime_channel || "base";
     state.environment = await api.getEnvironment({ runtimeChannel, refresh: true });
-    state.cudaActionStatus = "环境检测完成";
+    setTransientStatus("cudaActionStatus", "环境检测完成", { shouldRender: false });
   } catch (error) {
-    state.cudaActionStatus = error.message || "环境检测失败";
+    setTransientStatus("cudaActionStatus", error.message || "环境检测失败", { shouldRender: false });
   }
   render({ fullView: true });
 }
 
 async function handleRefreshLogs() {
-  state.serviceActionStatus = "正在读取后端日志...";
-  render({ fullView: true });
+  setTransientStatus("serviceActionStatus", "正在读取后端日志...");
   try {
     const response = await api.getSystemLogs(200);
     state.logOutput = response.content || "";
     state.logPath = response.path || "";
-    state.serviceActionStatus = "日志已刷新";
+    setTransientStatus("serviceActionStatus", "日志已刷新", { shouldRender: false });
   } catch (error) {
-    state.serviceActionStatus = error.message || "读取日志失败";
+    setTransientStatus("serviceActionStatus", error.message || "读取日志失败", { shouldRender: false });
   }
   render({ fullView: true });
 }
 
 async function handleInstallCuda() {
-  state.cudaActionStatus = "正在安装 CUDA 支持，这可能需要几分钟...";
+  setTransientStatus("cudaActionStatus", "正在安装 CUDA 支持，这可能需要几分钟...", { shouldRender: false });
   state.cudaInstallOutput = "";
   render({ fullView: true });
   try {
@@ -470,28 +530,31 @@ async function handleInstallCuda() {
       runtimeChannel: response.runtimeChannel || state.settings?.runtime_channel || "base",
       refresh: true,
     });
-    state.cudaActionStatus = response.restartRequired
-      ? "CUDA 安装完成，请重启应用后切换到新的 GPU 运行时"
-      : "CUDA 安装完成";
+    setTransientStatus(
+      "cudaActionStatus",
+      response.restartRequired
+        ? "CUDA 安装完成，请重启应用后切换到新的 GPU 运行时"
+        : "CUDA 安装完成",
+      { shouldRender: false },
+    );
   } catch (error) {
-    state.cudaActionStatus = error.message || "CUDA 安装失败";
+    setTransientStatus("cudaActionStatus", error.message || "CUDA 安装失败", { shouldRender: false });
   }
   render({ fullView: true });
 }
 
 async function handleShutdownService() {
-  state.serviceActionStatus = "正在关闭后端服务...";
-  render({ fullView: true });
+  setTransientStatus("serviceActionStatus", "正在关闭后端服务...");
   try {
     const response = await api.shutdownService();
-    state.serviceActionStatus = response.message || "服务正在关闭";
+    setTransientStatus("serviceActionStatus", response.message || "服务正在关闭", { shouldRender: false });
     state.serviceOnline = false;
     if (state.pollTimer) {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
     }
   } catch (error) {
-    state.serviceActionStatus = error.message || "关闭服务失败";
+    setTransientStatus("serviceActionStatus", error.message || "关闭服务失败", { shouldRender: false });
   }
   render({ fullView: true });
 }

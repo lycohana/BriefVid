@@ -1,5 +1,32 @@
 import { escapeHtml } from "../utils.js";
 
+function getStatusTone(message) {
+  if (/失败|错误|不可用|未就绪|无效|已取消|关闭/i.test(message)) {
+    return "error";
+  }
+  if (/完成|成功|已保存|已刷新|已开始|已删除|已更新|已复制|已请求/i.test(message)) {
+    return "success";
+  }
+  return "info";
+}
+
+function renderStatusNotice(message, statusKey) {
+  if (!message) {
+    return "";
+  }
+  const tone = getStatusTone(message);
+  return `
+    <div class="action-status tone-${tone}">
+      <span class="action-status-copy">${escapeHtml(message)}</span>
+      <button class="action-status-close" type="button" data-dismiss-status="${statusKey}" aria-label="关闭提示">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
 export function renderSettingsView(state) {
   const settings = state.settings || {};
   const info = state.systemInfo || {};
@@ -76,11 +103,7 @@ export function renderSettingsView(state) {
               </button>
             </div>
           </div>
-          ${state.cudaActionStatus ? `
-            <div id="cuda-action-status" class="action-status ${state.cudaActionStatus.includes('成功') ? 'success' : state.cudaActionStatus.includes('失败') ? 'error' : ''}">
-              ${escapeHtml(state.cudaActionStatus)}
-            </div>
-          ` : ''}
+          ${renderStatusNotice(state.cudaActionStatus, "cudaActionStatus")}
           ${state.cudaInstallOutput ? `
             <label class="input-row">
               <span class="input-label">CUDA 安装输出</span>
@@ -197,11 +220,7 @@ export function renderSettingsView(state) {
                 </svg>
                 保存设置
               </button>
-              ${state.settingsSaveStatus ? `
-                <div id="settings-save-status" class="action-status ${state.settingsSaveStatus.includes('成功') ? 'success' : state.settingsSaveStatus.includes('失败') ? 'error' : ''}">
-                  ${escapeHtml(state.settingsSaveStatus)}
-                </div>
-              ` : ''}
+              ${renderStatusNotice(state.settingsSaveStatus, "settingsSaveStatus")}
             </div>
           </section>
         </form>
@@ -273,11 +292,7 @@ export function renderSettingsView(state) {
           <button id="refresh-logs" class="secondary-button" type="button">刷新日志</button>
           <button id="shutdown-service" class="secondary-button danger-button" type="button">关闭后端服务</button>
         </div>
-        ${state.serviceActionStatus ? `
-          <div class="action-status ${state.serviceActionStatus.includes('失败') ? 'error' : ''}">
-            ${escapeHtml(state.serviceActionStatus)}
-          </div>
-        ` : ''}
+        ${renderStatusNotice(state.serviceActionStatus, "serviceActionStatus")}
         <label class="input-row">
           <span class="input-label">当前日志文件</span>
           <input class="input-field" value="${escapeHtml(state.logPath || info.service?.log_file || '')}" readonly />

@@ -1735,6 +1735,10 @@ body {
 /* ========== 状态提示 ========== */
 .submit-status,
 .action-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  justify-content: space-between;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
@@ -1746,13 +1750,15 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
-.submit-status.success {
+.submit-status.success,
+.submit-status.tone-success {
   background: var(--success-bg);
   border-color: var(--success);
   color: var(--success);
 }
 
-.submit-status.error {
+.submit-status.error,
+.submit-status.tone-error {
   background: var(--error-bg);
   border-color: var(--error);
   color: var(--error);
@@ -1763,16 +1769,51 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
-.action-status.success {
+.action-status.success,
+.action-status.tone-success {
   background: var(--success-bg);
   border-color: var(--success);
   color: var(--success);
 }
 
-.action-status.error {
+.action-status.error,
+.action-status.tone-error {
   background: var(--error-bg);
   border-color: var(--error);
   color: var(--error);
+}
+
+.submit-status-copy,
+.action-status-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.submit-status-close,
+.action-status-close {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: currentColor;
+  opacity: 0.4;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.submit-status-close:hover,
+.submit-status-close:focus-visible,
+.action-status-close:hover,
+.action-status-close:focus-visible {
+  opacity: 0.82;
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
 }
 
 /* ========== 徽章 ========== */

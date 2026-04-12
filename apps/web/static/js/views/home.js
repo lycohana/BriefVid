@@ -1,5 +1,32 @@
 import { escapeHtml, formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, taskStatusLabel } from "../utils.js";
 
+function getStatusTone(message) {
+  if (/失败|错误|不可用|未就绪|无效|已取消|关闭/i.test(message)) {
+    return "error";
+  }
+  if (/完成|成功|已保存|已刷新|已开始|已删除|已更新|已复制|已请求/i.test(message)) {
+    return "success";
+  }
+  return "info";
+}
+
+function renderStatusNotice(message, className, statusKey) {
+  if (!message) {
+    return "";
+  }
+  const tone = getStatusTone(message);
+  return `
+    <div class="${className} tone-${tone}">
+      <span class="${className}-copy">${escapeHtml(message)}</span>
+      <button class="${className}-close" type="button" data-dismiss-status="${statusKey}" aria-label="关闭提示">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
 export function renderHomeView(state) {
   return state.page === "video-detail" ? renderVideoDetailPage(state) : renderLibraryPage(state);
 }
@@ -143,7 +170,7 @@ function renderLibraryRegions(state) {
               开始总结
             </button>
           </div>
-          ${state.submitStatus ? `<div class="submit-status ${state.submitStatus.includes('成功') ? 'success' : state.submitStatus.includes('失败') ? 'error' : ''}">${escapeHtml(state.submitStatus)}</div>` : ""}
+          ${renderStatusNotice(state.submitStatus, "submit-status", "submitStatus")}
         </form>
         ${state.probePreview ? renderProbePreview(state.probePreview) : ""}
       </article>

@@ -4993,7 +4993,7 @@ textarea {
 .action-status {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 48px;
   padding: 12px 18px;
@@ -5006,7 +5006,7 @@ textarea {
   text-align: center;
   box-shadow: 0 18px 40px rgba(17, 24, 39, 0.12);
   backdrop-filter: blur(18px) saturate(140%);
-  pointer-events: none;
+  pointer-events: auto;
   animation: floatingNoticeIn 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -5041,7 +5041,32 @@ textarea {
 
 .floating-notice-copy {
   min-width: 0;
+  flex: 1;
   font-weight: 600;
+}
+
+.floating-notice-close {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  margin-left: auto;
+  background: transparent;
+  color: currentColor;
+  opacity: 0.42;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background-color var(--transition-fast);
+}
+
+.floating-notice-close:hover,
+.floating-notice-close:focus-visible {
+  opacity: 0.82;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  outline: none;
 }
 
 @keyframes floatingNoticeIn {
