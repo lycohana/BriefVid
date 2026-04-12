@@ -1,3 +1,4 @@
+import { toBlob } from "html-to-image";
 import { useEffect, useMemo, useRef, useState, type SVGProps } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -160,12 +161,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [taskPanelState, setTaskPanelState] = useState<TaskPanelState>("collapsed");
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [status, setStatus] = useState("");
+  const [isExportingKnowledgeCard, setIsExportingKnowledgeCard] = useState(false);
+  const [expandedChapterGroupIds, setExpandedChapterGroupIds] = useState<string[]>([]);
   const [selectedPageNumber, setSelectedPageNumber] = useState<number | null>(null);
   const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
   const lastAutoRefreshEventRef = useRef<string | null>(null);
   const taskPopoverRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
+  const knowledgeExportRef = useRef<HTMLElement | null>(null);
+  const lastChapterGroupSignatureRef = useRef("");
   const activeVideoIdRef = useRef(videoId);
   const selectedTaskIdRef = useRef<string | null>(null);
   const refreshRequestRef = useRef(0);
@@ -506,6 +511,72 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     };
   }, [actionMenuOpen, taskPanelState]);
 
+  async function handleCopyKnowledgeCardAsImage() {
+    if (!knowledgeExportRef.current || isExportingKnowledgeCard) {
+      return;
+    }
+
+    if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+      setStatus("当前环境不支持将图片复制到剪贴板。");
+      return;
+    }
+
+    const exportTarget = knowledgeExportRef.current;
+    const previousStatus = status;
+    const computedStyle = window.getComputedStyle(exportTarget);
+    const backgroundColor = computedStyle.backgroundColor === "rgba(0, 0, 0, 0)" ? window.getComputedStyle(document.body).backgroundColor : computedStyle.backgroundColor;
+
+    setIsExportingKnowledgeCard(true);
+    setStatus("正在导出当前知识卡片...");
+    exportTarget.setAttribute("data-export-mode", "true");
+
+    try {
+      await document.fonts.ready;
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
+
+      const blob = await toBlob(exportTarget, {
+        backgroundColor,
+        cacheBust: true,
+        pixelRatio: Math.max(window.devicePixelRatio || 1, 2),
+      });
+
+      if (!blob) {
+        throw new Error("未能生成图片，请稍后重试。");
+      }
+
+      if (window.desktop?.clipboard) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === "string") {
+              resolve(reader.result);
+              return;
+            }
+            reject(new Error("图片编码失败，请稍后重试。"));
+          };
+          reader.onerror = () => reject(reader.error ?? new Error("图片编码失败，请稍后重试。"));
+          reader.readAsDataURL(blob);
+        });
+        await window.desktop.clipboard.writeImage(dataUrl);
+      } else {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      }
+      setStatus("当前知识卡片已复制为图片。");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Document is not focused")) {
+        setStatus("复制失败：请先点一下应用窗口，再重新尝试。");
+      } else {
+        setStatus(error instanceof Error ? error.message : "导出图片失败，请稍后重试。");
+      }
+    } finally {
+      exportTarget.removeAttribute("data-export-mode");
+      setIsExportingKnowledgeCard(false);
+      window.setTimeout(() => {
+        setStatus((current) => (current === "当前知识卡片已复制为图片。" || current === "正在导出当前知识卡片..." ? previousStatus : current));
+      }, 2600);
+    }
+  }
+
   const selectedResult = selectedTaskDetail?.result ?? null;
   const liveProgress = useMemo(() => summarizeEvents(latestEvents), [latestEvents]);
   const contentState = useMemo(() => {
@@ -552,6 +623,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const keyPointCards = knowledgeCards.filter((item) => item.kind === "key-point");
   const chapterCards = knowledgeCards.filter((item) => item.kind === "chapter");
   const chapterGroups = useMemo(() => buildChapterGroups(chapterCards, selectedResult), [chapterCards, selectedResult]);
+  const areAllChapterGroupsExpanded = chapterGroups.length > 0 && expandedChapterGroupIds.length === chapterGroups.length;
   const selectedKnowledgeNoteMarkdown = useMemo(() => resolveKnowledgeNoteMarkdown(selectedResult), [selectedResult]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
   const liveStatus = latestTaskDetail?.status ?? latestTaskSummary?.status ?? video?.latest_status;
@@ -598,12 +670,43 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     return withBilibiliPlayerSeek(bilibiliEmbedBaseUrl, playerSeekTarget.seconds, playerSeekTarget.nonce);
   }, [bilibiliEmbedBaseUrl, playerSeekTarget]);
 
+  useEffect(() => {
+    const chapterGroupSignature = chapterGroups.map((group) => group.id).join("|");
+    const chapterGroupsChanged = lastChapterGroupSignatureRef.current !== chapterGroupSignature;
+    lastChapterGroupSignatureRef.current = chapterGroupSignature;
+
+    setExpandedChapterGroupIds((current) => {
+      const visibleGroupIds = new Set(chapterGroups.map((group) => group.id));
+      const nextExpanded = current.filter((groupId) => visibleGroupIds.has(groupId));
+      if (chapterGroups.length === 0) {
+        return nextExpanded.length ? [] : nextExpanded;
+      }
+      if (nextExpanded.length > 0 || !chapterGroupsChanged) {
+        return nextExpanded;
+      }
+      return [chapterGroups[0].id];
+    });
+  }, [chapterGroups]);
+
   function handleSeekToChapter(seconds: number | null) {
     if (!bilibiliEmbedBaseUrl || seconds == null) {
       return;
     }
     setPlayerSeekTarget((current) => ({ nonce: current.nonce + 1, seconds }));
     playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function handleToggleAllChapterGroups() {
+    setExpandedChapterGroupIds(areAllChapterGroupsExpanded ? [] : chapterGroups.map((group) => group.id));
+  }
+
+  function handleToggleChapterGroup(groupId: string, open: boolean) {
+    setExpandedChapterGroupIds((current) => {
+      if (open) {
+        return current.includes(groupId) ? current : [...current, groupId];
+      }
+      return current.filter((item) => item !== groupId);
+    });
   }
 
   if (!video) {
@@ -1069,12 +1172,24 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               contentState ? (
                 <TaskStatePanel state={contentState} />
               ) : (
-                <section className="detail-tab-panel">
+                <section className="detail-tab-panel detail-export-target" ref={knowledgeExportRef}>
                   <div className="detail-knowledge-lead">
                     <section className="detail-content-section detail-content-section-overview">
                       <div className="detail-section-heading">
-                        <h3 className="detail-section-label">Overview</h3>
-                        {overviewCard?.meta ? <span className="detail-section-meta">{overviewCard.meta}</span> : null}
+                        <div className="detail-section-heading-main">
+                          <h3 className="detail-section-label">Overview</h3>
+                          {overviewCard?.meta ? <span className="detail-section-meta">{overviewCard.meta}</span> : null}
+                        </div>
+                        <button
+                          className="detail-section-icon-button"
+                          type="button"
+                          onClick={handleCopyKnowledgeCardAsImage}
+                          disabled={isExportingKnowledgeCard}
+                          aria-label={isExportingKnowledgeCard ? "正在导出知识卡片图片" : "复制当前知识卡片为图片"}
+                          title={isExportingKnowledgeCard ? "正在导出知识卡片图片" : "复制当前知识卡片为图片"}
+                        >
+                          <IconCopyImage />
+                        </button>
                       </div>
                       <h4 className="detail-section-title">{overviewCard?.title || "核心概览"}</h4>
                       {overviewCard?.content ? <MarkdownContent className="detail-section-body markdown-content-body" compact content={overviewCard.content} /> : <p className="detail-section-body">当前任务还没有生成核心概览。</p>}
@@ -1094,6 +1209,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               src={bilibiliEmbedUrl}
                               title={`${video.title} 播放器`}
                             />
+                            <div className="detail-video-export-mask" aria-hidden="true">
+                              {video.cover_url ? (
+                                <img className="detail-video-export-cover" src={video.cover_url} alt="" />
+                              ) : (
+                                <div className="detail-video-export-mask-copy">
+                                  <strong>{video.title}</strong>
+                                  <span>播放器画面无法直接导出，已保留当前卡片内容与视频入口。</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ) : null}
@@ -1119,13 +1244,34 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                   <section className="detail-content-section detail-content-section-last">
                     <div className="detail-section-heading">
                       <h3 className="detail-section-label">Chapters</h3>
-                      <span className="detail-section-meta">{chapterCards.length} 条</span>
+                      <div className="detail-section-heading-actions">
+                        {chapterGroups.length ? (
+                          <button
+                            className="detail-section-text-action"
+                            type="button"
+                            onClick={handleToggleAllChapterGroups}
+                          >
+                            {areAllChapterGroupsExpanded ? "一键收起" : "一键展开"}
+                          </button>
+                        ) : null}
+                        <span className="detail-section-meta">{chapterCards.length} 条</span>
+                      </div>
                     </div>
                     {chapterGroups.length ? (
                         <div className="detail-chapter-groups">
-                          {chapterGroups.map((group, groupIndex) => (
-                            <details className="detail-chapter-group" key={group.id} open={groupIndex === 0}>
-                              <summary className="detail-chapter-group-summary">
+                          {chapterGroups.map((group) => {
+                            const isOpen = expandedChapterGroupIds.includes(group.id);
+                            return (
+                            <div
+                              className={`detail-chapter-group ${isOpen ? "is-open" : ""}`}
+                              key={group.id}
+                            >
+                              <button
+                                className="detail-chapter-group-summary"
+                                type="button"
+                                aria-expanded={isOpen}
+                                onClick={() => handleToggleChapterGroup(group.id, !isOpen)}
+                              >
                                 <div className="detail-chapter-group-copy">
                                   <strong>{group.title}</strong>
                                   <span>{group.meta}</span>
@@ -1133,7 +1279,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                 <span className="detail-chapter-group-caret" aria-hidden="true">
                                   <IconChevronDown />
                                 </span>
-                              </summary>
+                              </button>
                               <div className="detail-chapter-group-content">
                                 <div className="detail-chapter-group-body">
                                   {group.items.map((card, index) => (
@@ -1146,8 +1292,8 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                   ))}
                                 </div>
                               </div>
-                            </details>
-                          ))}
+                            </div>
+                          )})}
                         </div>
                     ) : (
                       <div className="empty-placeholder">当前任务还没有生成章节知识卡。</div>
@@ -1414,6 +1560,18 @@ function IconShare(props: SVGProps<SVGSVGElement>) {
       <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
       <path d="M12 16V4" />
       <path d="m7 9 5-5 5 5" />
+    </svg>
+  );
+}
+
+function IconCopyImage(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
+      <rect x="3.5" y="6.5" width="13" height="13" rx="2.5" />
+      <path d="M9 6V5.5A2.5 2.5 0 0 1 11.5 3H18a2.5 2.5 0 0 1 2.5 2.5V12" />
+      <path d="m6.5 16.5 3.4-3.4a1.3 1.3 0 0 1 1.84 0l1.26 1.26" />
+      <path d="m12.5 15.5 1.4-1.4a1.3 1.3 0 0 1 1.84 0l.76.76" />
+      <circle cx="11" cy="10.5" r="1.1" />
     </svg>
   );
 }

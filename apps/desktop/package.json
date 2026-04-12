@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.0",
+    "html-to-image": "^1.11.13",
     "katex": "^0.16.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
