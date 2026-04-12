@@ -5,6 +5,7 @@ import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
 import { api } from "../api";
 import { MarkdownContent } from "../components/MarkdownContent";
 import {
+  buildChapterGroups,
   buildKnowledgeCards,
   describeMindMapPlaceholder,
   describeTaskContentState,
@@ -533,6 +534,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const overviewCard = knowledgeCards.find((item) => item.kind === "overview") ?? null;
   const keyPointCards = knowledgeCards.filter((item) => item.kind === "key-point");
   const chapterCards = knowledgeCards.filter((item) => item.kind === "chapter");
+  const chapterGroups = useMemo(() => buildChapterGroups(chapterCards, selectedResult), [chapterCards, selectedResult]);
   const selectedKnowledgeNoteMarkdown = useMemo(() => resolveKnowledgeNoteMarkdown(selectedResult), [selectedResult]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
   const liveStatus = latestTaskDetail?.status ?? latestTaskSummary?.status ?? video?.latest_status;
@@ -1086,7 +1088,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                         <span className="detail-section-meta">{keyPointCards.length} 条</span>
                       </div>
                       {keyPointCards.length ? (
-                        <div className="knowledge-card-grid knowledge-card-grid-keypoints">
+                        <div className="detail-point-rail">
                           {keyPointCards.map((card, index) => (
                             <KnowledgeCardBlock card={card} index={index} key={card.id} />
                           ))}
@@ -1102,15 +1104,32 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       <h3 className="detail-section-label">Chapters</h3>
                       <span className="detail-section-meta">{chapterCards.length} 条</span>
                     </div>
-                    {chapterCards.length ? (
-                        <div className="knowledge-card-grid knowledge-card-grid-chapters">
-                          {chapterCards.map((card, index) => (
-                            <KnowledgeCardBlock
-                              card={card}
-                              index={index}
-                              key={card.id}
-                              onSeekToTimestamp={bilibiliEmbedBaseUrl ? handleSeekToChapter : undefined}
-                            />
+                    {chapterGroups.length ? (
+                        <div className="detail-chapter-groups">
+                          {chapterGroups.map((group, groupIndex) => (
+                            <details className="detail-chapter-group" key={group.id} open={groupIndex === 0}>
+                              <summary className="detail-chapter-group-summary">
+                                <div className="detail-chapter-group-copy">
+                                  <strong>{group.title}</strong>
+                                  <span>{group.meta}</span>
+                                </div>
+                                <span className="detail-chapter-group-caret" aria-hidden="true">
+                                  <IconChevronDown />
+                                </span>
+                              </summary>
+                              <div className="detail-chapter-group-content">
+                                <div className="detail-chapter-group-body">
+                                  {group.items.map((card, index) => (
+                                    <KnowledgeCardBlock
+                                      card={card}
+                                      index={index}
+                                      key={card.id}
+                                      onSeekToTimestamp={bilibiliEmbedBaseUrl ? handleSeekToChapter : undefined}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            </details>
                           ))}
                         </div>
                     ) : (
@@ -1193,46 +1212,57 @@ function KnowledgeCardBlock({
   onSeekToTimestamp?: (seconds: number | null) => void;
 }) {
   if (card.kind === "chapter") {
+    const canSeek = typeof card.timestampSeconds === "number" && Boolean(onSeekToTimestamp);
     const chapterCardBody = (
-      <>
-        <div className="detail-chapter-card-top">
+      <div className="detail-chapter-node-shell">
+        <span className="detail-chapter-node-dot" aria-hidden="true" />
+        <div className="detail-chapter-node-meta">
           <div className="detail-chapter-time">
             <IconClock className="detail-inline-icon" />
             <span>{card.timestampSeconds != null ? formatDuration(card.timestampSeconds) : "--"}</span>
           </div>
-          <span className="detail-card-index">{String(index + 1).padStart(2, "0")}</span>
         </div>
-        <h4>{card.title}</h4>
-        <MarkdownContent className="detail-card-markdown" compact content={card.content} />
-        <div className="detail-card-link">
-          查看片段
-          <IconArrowRight className="detail-inline-icon" />
+        <div className="detail-chapter-node-copy">
+          <h4>{card.title}</h4>
+          <MarkdownContent className="detail-card-markdown" compact content={card.content} />
         </div>
-      </>
+        {canSeek ? (
+          <div className="detail-card-link">
+            定位片段
+            <IconArrowRight className="detail-inline-icon" />
+          </div>
+        ) : null}
+      </div>
     );
 
-    if (typeof card.timestampSeconds === "number" && onSeekToTimestamp) {
+    if (canSeek) {
       return (
-        <button className="detail-chapter-card detail-chapter-card-action" type="button" onClick={() => onSeekToTimestamp(card.timestampSeconds ?? null)}>
+        <button className="detail-chapter-node detail-chapter-node-action" type="button" onClick={() => onSeekToTimestamp!(card.timestampSeconds ?? null)}>
           {chapterCardBody}
         </button>
       );
     }
 
     return (
-      <article className="detail-chapter-card">
+      <article className="detail-chapter-node">
         {chapterCardBody}
       </article>
     );
   }
 
   return (
-    <article className="detail-point-card">
-      <div className="detail-point-card-top">
-        <h4>{card.title}</h4>
-        <span className="detail-card-index">{String(index + 1).padStart(2, "0")}</span>
+    <article className="detail-point-item">
+      <div className="detail-point-marker" aria-hidden="true">
+        <span>{String(index + 1).padStart(2, "0")}</span>
       </div>
-      <MarkdownContent className="detail-card-markdown" compact content={card.content} />
+      <div className="detail-point-main">
+        {card.title ? (
+          <div className="detail-point-card-top">
+            <h4>{card.title}</h4>
+          </div>
+        ) : null}
+        <MarkdownContent className="detail-card-markdown" compact content={card.content} />
+      </div>
     </article>
   );
 }
@@ -1265,6 +1295,14 @@ function IconChevronLeft(props: SVGProps<SVGSVGElement>) {
   return (
     <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
       <path d="m15 18-6-6 6-6" />
+    </svg>
+  );
+}
+
+function IconChevronDown(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }
@@ -1349,14 +1387,6 @@ function IconSettings(props: SVGProps<SVGSVGElement>) {
     <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
       <path d="M12 3.75a1.5 1.5 0 0 1 1.471 1.206l.167.835a6.954 6.954 0 0 1 1.309.544l.716-.46a1.5 1.5 0 0 1 1.867.195l.8.8a1.5 1.5 0 0 1 .195 1.867l-.46.716c.224.417.406.856.544 1.309l.835.167A1.5 1.5 0 0 1 20.25 12a1.5 1.5 0 0 1-1.206 1.471l-.835.167a6.954 6.954 0 0 1-.544 1.309l.46.716a1.5 1.5 0 0 1-.195 1.867l-.8.8a1.5 1.5 0 0 1-1.867.195l-.716-.46a6.954 6.954 0 0 1-1.309.544l-.167.835A1.5 1.5 0 0 1 12 20.25a1.5 1.5 0 0 1-1.471-1.206l-.167-.835a6.954 6.954 0 0 1-1.309-.544l-.716.46a1.5 1.5 0 0 1-1.867-.195l-.8-.8a1.5 1.5 0 0 1-.195-1.867l.46-.716a6.954 6.954 0 0 1-.544-1.309l-.835-.167A1.5 1.5 0 0 1 3.75 12a1.5 1.5 0 0 1 1.206-1.471l.835-.167c.138-.453.32-.892.544-1.309l-.46-.716a1.5 1.5 0 0 1 .195-1.867l.8-.8a1.5 1.5 0 0 1 1.867-.195l.716.46a6.954 6.954 0 0 1 1.309-.544l.167-.835A1.5 1.5 0 0 1 12 3.75Z" />
       <circle cx="12" cy="12" r="3.25" />
-    </svg>
-  );
-}
-
-function IconChevronDown(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
-      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { buildKnowledgeCards, describeMindMapPlaceholder, describeTaskContentState, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
+import { buildChapterGroups, buildKnowledgeCards, describeMindMapPlaceholder, describeTaskContentState, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
 import type { TaskDetail, TaskResult, TaskSummary } from "../src/types.ts";
 
 function run(name: string, fn: () => void) {
@@ -35,6 +35,7 @@ function createTaskResult(overrides: Partial<TaskResult> = {}): TaskResult {
       { title: "章节一", start: 12, summary: "章节一摘要" },
       { title: "章节二", start: 88, summary: "章节二摘要" },
     ],
+    chapter_groups: [],
     artifacts: {},
     llm_prompt_tokens: 100,
     llm_completion_tokens: 80,
@@ -124,6 +125,73 @@ run("builds legacy knowledge note markdown from existing result fields", () => {
   assert.match(markdown, /## 摘要概览/);
   assert.match(markdown, /## 关键要点/);
   assert.match(markdown, /### 章节一/);
+});
+
+run("groups chapter cards into collapsible major chapters", () => {
+  const cards = buildKnowledgeCards(
+    createTaskResult({
+      timeline: [
+        { title: "章节一", start: 10, summary: "摘要一" },
+        { title: "章节二", start: 90, summary: "摘要二" },
+        { title: "章节三", start: 180, summary: "摘要三" },
+        { title: "章节四", start: 260, summary: "摘要四" },
+        { title: "章节五", start: 340, summary: "摘要五" },
+      ],
+    }),
+  );
+
+  const groups = buildChapterGroups(cards);
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].items.length, 3);
+  assert.equal(groups[1].items.length, 2);
+  assert.match(groups[0].meta, /个小章节/);
+});
+
+run("prefers backend chapter groups when available", () => {
+  const result = createTaskResult({
+    chapter_groups: [
+      {
+        title: "函数基础",
+        start: 0,
+        summary: "定义到符号约定",
+        children: [
+          { title: "定义", start: 0, summary: "定义摘要" },
+          { title: "符号", start: 30, summary: "符号摘要" },
+        ],
+      },
+    ],
+  });
+
+  const cards = buildKnowledgeCards(result);
+  const groups = buildChapterGroups(cards, result);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].title, "函数基础");
+  assert.equal(groups[0].items.length, 2);
+  assert.match(groups[0].meta, /定义到符号约定/);
+});
+
+run("replaces placeholder chapter-group titles with content titles", () => {
+  const result = createTaskResult({
+    chapter_groups: [
+      {
+        title: "大章节 1",
+        start: 0,
+        summary: "函数定义与符号规范；典型函数示例分析",
+        children: [
+          { title: "章节 1", start: 0, summary: "函数定义与符号规范，解释映射关系。" },
+          { title: "章节 2", start: 30, summary: "典型函数示例分析，对比绝对值函数。" },
+        ],
+      },
+    ],
+  });
+
+  const cards = buildKnowledgeCards(result);
+  const groups = buildChapterGroups(cards, result);
+
+  assert.match(groups[0].title, /函数定义与符号规范/);
+  assert.match(groups[0].items[0].title, /函数定义与符号规范/);
 });
 
 run("describes a pending workspace state when the selected task is still running", () => {
