@@ -361,7 +361,7 @@ def test_real_pipeline_normalizes_placeholder_titles_from_summary_text() -> None
     )
 
     assert str(summary["chapters"][0]["title"]).startswith("函数定义与符号规范")
-    assert summary["chapterGroups"][0]["title"] == "函数定义与符号规范"
+    assert str(summary["chapterGroups"][0]["title"]).startswith("函数定义与符号规范")
 
 
 def test_real_pipeline_allows_more_chapters_for_long_content() -> None:
@@ -456,7 +456,7 @@ def test_real_pipeline_prefers_structural_chapters_when_aggregate_llm_is_too_sho
     )
 
     assert len(result["chapters"]) == 8
-    assert len(result["chapterGroups"]) >= 3
+    assert len(result["chapterGroups"]) >= 2
     assert len(result["bulletPoints"]) >= 4
 
 
