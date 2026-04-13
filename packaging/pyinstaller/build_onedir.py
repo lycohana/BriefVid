@@ -174,7 +174,7 @@ def verify_portable_python_runtime(runtime_dir: Path) -> None:
         str(python_exe),
         "-c",
         (
-            "import av, ctranslate2, ctypes, encodings, faster_whisper, json, numpy, sqlite3, ssl, sys, video_sum_core; "
+            "import ctypes, encodings, json, sqlite3, ssl, sys, video_sum_core; "
             "print(json.dumps({'exe': sys.executable, 'prefix': sys.prefix, 'base_prefix': sys.base_prefix}))"
         ),
     ]
@@ -240,6 +240,13 @@ def cleanup_runtime_site_packages(python_exe: Path) -> None:
         "typer": True,       # CLI 框架，运行时不需要
         "pygments": True,    # 语法高亮，rich/typer 的依赖
         "markdown_it_py": True,  # rich 的依赖
+        # 本地 ASR 改为按需安装，不再进入基础运行时
+        "faster_whisper": True,
+        "ctranslate2": True,
+        "onnxruntime": True,
+        "tokenizers": True,
+        "huggingface_hub": True,
+        "hf_xet": True,
     }
 
     removed_count = 0
@@ -409,6 +416,13 @@ def cleanup_build_site_packages(python_exe: Path) -> None:
         "typer": True,       # CLI 框架，运行时不需要
         "pygments": True,    # 语法高亮，rich/typer 的依赖
         "markdown_it_py": True,  # rich 的依赖
+        # 本地 ASR 相关重依赖不参与基础包分析
+        "faster_whisper": True,
+        "ctranslate2": True,
+        "onnxruntime": True,
+        "tokenizers": True,
+        "huggingface_hub": True,
+        "hf_xet": True,
     }
 
     removed_count = 0

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from video_sum_infra.config import ServiceSettings
-from video_sum_service.app import app, settings_manager, update_settings
+from video_sum_service.app import app, install_local_asr, settings_manager, update_settings
 from video_sum_service.settings_manager import SettingsUpdatePayload
 
 
@@ -48,3 +48,47 @@ def test_update_settings_reuses_environment_probe(monkeypatch, tmp_path: Path) -
     assert response["settings"]["runtime_channel"] == "base"
     assert detect_calls == ["base"]
 
+
+def test_install_local_asr_refreshes_environment(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr("video_sum_service.app.ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr("video_sum_service.app.runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr("video_sum_service.app._install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr("video_sum_service.app._ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(
+        "video_sum_service.app._run_command",
+        lambda command, runtime_channel, timeout=1800: type("Result", (), {"stdout": "ok", "stderr": ""})(),
+    )
+    monkeypatch.setattr("video_sum_service.app.clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        "video_sum_service.app.detect_environment",
+        lambda runtime_channel=None: {
+            "runtimeChannel": runtime_channel or "base",
+            "localAsrInstalled": True,
+            "localAsrAvailable": True,
+            "localAsrVersion": "1.1.1",
+        },
+    )
+    monkeypatch.setattr(
+        "video_sum_service.app.build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+    monkeypatch.setattr("video_sum_service.app.write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    response = install_local_asr()
+
+    assert response["installed"] is True
+    assert response["runtimeChannel"] == "base"
+    assert response["environment"]["localAsrVersion"] == "1.1.1"

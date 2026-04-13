@@ -10,7 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.10,<3.0",
   "yt-dlp>=2025.3.31",
-  "faster-whisper>=1.1.1",
   "httpx>=0.28,<1.0",
   "video-sum-infra",
 ]

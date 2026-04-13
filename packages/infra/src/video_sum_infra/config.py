@@ -212,7 +212,7 @@ def normalize_device_preference(value: str | None, default: str = "cpu") -> str:
     return DEVICE_PREFERENCE_ALIASES.get(normalized, default)
 
 
-def normalize_transcription_provider(value: str | None, default: str = "local") -> str:
+def normalize_transcription_provider(value: str | None, default: str = "siliconflow") -> str:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return default
@@ -229,7 +229,7 @@ class ServiceSettings(BaseSettings):
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
-    transcription_provider: str = "local"
+    transcription_provider: str = "siliconflow"
     device_preference: str = "cpu"
     compute_type: str = "int8"
     model_mode: str = "fixed"

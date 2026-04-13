@@ -294,7 +294,9 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
                 "cudaAvailable": False,
                 "gpuName": "",
                 "ytDlpVersion": "",
-                "fasterWhisperVersion": "",
+                "localAsrInstalled": False,
+                "localAsrAvailable": False,
+                "localAsrVersion": "",
                 "ffmpegLocation": "",
                 "recommendedModel": "base",
                 "recommendedDevice": "cpu",
@@ -324,11 +326,19 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "cudaAvailable": cuda_available,
             "gpuName": gpu_name,
             "ytDlpVersion": importlib.metadata.version("yt-dlp"),
-            "fasterWhisperVersion": importlib.metadata.version("faster-whisper"),
+            "localAsrVersion": "",
+            "localAsrInstalled": False,
+            "localAsrAvailable": False,
             "ffmpegLocation": "",
             "recommendedModel": "large-v3-turbo" if cuda_available else "base",
             "recommendedDevice": "cuda" if cuda_available else "cpu",
         }
+        try:
+            payload["localAsrVersion"] = importlib.metadata.version("faster-whisper")
+            payload["localAsrInstalled"] = True
+            payload["localAsrAvailable"] = True
+        except importlib.metadata.PackageNotFoundError:
+            pass
         print(json.dumps(payload, ensure_ascii=False))
         """
     ).strip()
@@ -360,7 +370,9 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "cudaAvailable": False,
             "gpuName": "",
             "ytDlpVersion": "",
-            "fasterWhisperVersion": "",
+            "localAsrInstalled": False,
+            "localAsrAvailable": False,
+            "localAsrVersion": "",
             "ffmpegLocation": "",
             "recommendedModel": "base",
             "recommendedDevice": "cpu",
@@ -375,6 +387,9 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "ffmpegLocation": str(ffmpeg_location() or ""),
         }
     )
+    payload["localAsrInstalled"] = bool(payload.get("localAsrInstalled"))
+    payload["localAsrAvailable"] = bool(payload.get("localAsrAvailable"))
+    payload["localAsrVersion"] = str(payload.get("localAsrVersion") or "")
     if not payload.get("runtimeError"):
         payload["runtimeError"] = ""
     _environment_probe_cache[active_channel] = dict(payload)
@@ -422,6 +437,7 @@ def build_worker(
         whisper_model=runtime_settings.whisper_model,
         whisper_device=runtime_settings.whisper_device,
         whisper_compute_type=runtime_settings.whisper_compute_type,
+        local_asr_available=bool(environment.get("localAsrAvailable")),
         siliconflow_asr_base_url=runtime_settings.siliconflow_asr_base_url,
         siliconflow_asr_model=runtime_settings.siliconflow_asr_model,
         siliconflow_asr_api_key=runtime_settings.siliconflow_asr_api_key,
@@ -892,6 +908,56 @@ def install_cuda_support(cuda_variant: str) -> dict[str, object]:
     }
 
 
+def install_local_asr(reinstall: bool = False) -> dict[str, object]:
+    current_settings = settings_manager.current
+    runtime_channel = current_settings.runtime_channel
+    runtime_dir = ensure_runtime_channel(runtime_channel)
+    python_executable = runtime_python_executable(runtime_channel)
+    if runtime_dir is None or python_executable is None:
+        raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
+
+    try:
+        _install_workspace_packages(python_executable, runtime_channel=runtime_channel)
+        _ensure_runtime_pip(python_executable, runtime_channel)
+        command = [
+            str(python_executable),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "faster-whisper>=1.1.1",
+        ]
+        if reinstall:
+            command.insert(5, "--force-reinstall")
+        result = _run_command(command, runtime_channel=runtime_channel, timeout=1800)
+    except subprocess.CalledProcessError as exc:
+        clear_environment_probe_cache(runtime_channel)
+        raise HTTPException(status_code=500, detail=((exc.stderr or exc.stdout or str(exc))[-1500:])) from exc
+
+    clear_environment_probe_cache(runtime_channel)
+    environment = detect_environment(runtime_channel)
+    app.state.task_worker = build_worker(
+        app.state.task_repository,
+        current_settings,
+        environment_info=environment,
+    )
+    write_runtime_metadata(
+        runtime_channel,
+        {
+            "runtimeChannel": runtime_channel,
+            "python": str(python_executable),
+            "localAsrInstalled": bool(environment.get("localAsrInstalled")),
+            "localAsrVersion": str(environment.get("localAsrVersion") or ""),
+        },
+    )
+    return {
+        "installed": bool(environment.get("localAsrInstalled")),
+        "runtimeChannel": runtime_channel,
+        "stdoutTail": ((result.stdout or "") + "\n" + (result.stderr or "")).strip()[-1500:],
+        "environment": environment,
+    }
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     current_settings = settings_manager.current
@@ -923,20 +989,31 @@ app.mount("/static", StaticFiles(directory=WEB_STATIC_DIR), name="static")
 app.mount("/media", StaticFiles(directory=CACHE_STATIC_DIR), name="media")
 
 
+def frontend_shell_response() -> FileResponse:
+    return FileResponse(
+        WEB_STATIC_DIR / "index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(WEB_STATIC_DIR / "index.html")
+    return frontend_shell_response()
 
 
 @app.get("/videos/{video_id}", include_in_schema=False)
 def video_detail_page(video_id: str) -> FileResponse:
-    return FileResponse(WEB_STATIC_DIR / "index.html")
+    return frontend_shell_response()
 
 
 @app.get("/settings", include_in_schema=False)
 @app.get("/settings/{subpath:path}", include_in_schema=False)
 def settings_page(subpath: str = "") -> FileResponse:
-    return FileResponse(WEB_STATIC_DIR / "index.html")
+    return frontend_shell_response()
 
 
 @app.get("/health")
@@ -1044,6 +1121,12 @@ def shutdown_service() -> dict[str, object]:
 def post_cuda_install(payload: dict[str, object]) -> dict[str, object]:
     requested_variant = payload.get("cuda_variant", payload.get("cudaVariant", "cu128"))
     return install_cuda_support(str(requested_variant))
+
+
+@app.post("/api/v1/asr/local/install")
+def post_local_asr_install(payload: dict[str, object] | None = None) -> dict[str, object]:
+    reinstall = bool((payload or {}).get("reinstall"))
+    return install_local_asr(reinstall=reinstall)
 
 
 @app.post("/api/v1/videos/probe", response_model=VideoProbeResponse)

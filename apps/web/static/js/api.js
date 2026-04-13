@@ -56,6 +56,13 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  installLocalAsr(payload = {}) {
+    return fetchJson("/api/v1/asr/local/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
   probeVideo(payload) {
     return fetchJson("/api/v1/videos/probe", {
       method: "POST",

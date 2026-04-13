@@ -133,10 +133,11 @@ def _should_retry_llm_transport_error(error: Exception) -> bool:
 class PipelineSettings:
     tasks_dir: Path
     runtime_channel: str = "base"
-    transcription_provider: str = "local"
+    transcription_provider: str = "siliconflow"
     whisper_model: str = "tiny"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    local_asr_available: bool = False
     siliconflow_asr_base_url: str = "https://api.siliconflow.cn/v1"
     siliconflow_asr_model: str = "TeleAI/TeleSpeechASR"
     siliconflow_asr_api_key: str = ""
@@ -495,6 +496,10 @@ class RealPipelineRunner(PipelineRunner):
         duration: float | None,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> tuple[str, list[dict[str, object]]]:
+        if not self._settings.local_asr_available:
+            raise TranscriptionConfigurationError(
+                "Local ASR is not installed in the current runtime. Install local ASR from Settings or switch to SiliconFlow."
+            )
         attempts = [
             {
                 "model": self._settings.whisper_model,

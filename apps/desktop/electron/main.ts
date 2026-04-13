@@ -551,6 +551,7 @@ async function loadApplication() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
+  await mainWindow.webContents.session.clearCache();
   if (isDev) {
     await mainWindow.loadURL(rendererUrl);
   } else if (backendStatus.ready) {

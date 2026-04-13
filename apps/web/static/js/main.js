@@ -201,6 +201,11 @@ function bindViewEvents() {
       return;
     }
 
+    if (target.closest("#install-local-asr")) {
+      await handleInstallLocalAsr();
+      return;
+    }
+
     const videoCard = target.closest("[data-video-id]");
     if (videoCard instanceof HTMLElement) {
       await handleVideoAction("open-video", { videoId: videoCard.dataset.videoId });
@@ -445,7 +450,7 @@ async function handleSettingsSubmit(event) {
     cache_dir: readTrimmedValue("cache_dir", current.cache_dir || ""),
     tasks_dir: readTrimmedValue("tasks_dir", current.tasks_dir || ""),
     database_url: readTrimmedValue("database_url", current.database_url || ""),
-    transcription_provider: readValue("transcription_provider", current.transcription_provider || "local"),
+    transcription_provider: readValue("transcription_provider", current.transcription_provider || "siliconflow"),
     whisper_model: readTrimmedValue("whisper_model", current.whisper_model || ""),
     whisper_device: readTrimmedValue("whisper_device", current.whisper_device || ""),
     whisper_compute_type: readTrimmedValue("whisper_compute_type", current.whisper_compute_type || ""),
@@ -543,6 +548,44 @@ async function handleInstallCuda() {
     );
   } catch (error) {
     setTransientStatus("cudaActionStatus", error.message || "CUDA 安装失败", { shouldRender: false });
+  }
+  render({ fullView: true });
+}
+
+async function handleInstallLocalAsr() {
+  setTransientStatus("localAsrActionStatus", "正在安装本地语音识别环境...", { shouldRender: false });
+  try {
+    const response = await api.installLocalAsr({});
+    state.localAsrInstallOutput = response.stdoutTail || "";
+    if (response.environment) {
+      state.environment = response.environment;
+    } else {
+      state.environment = await api.getEnvironment({
+        runtimeChannel: state.settings?.runtime_channel || "base",
+        refresh: true,
+      });
+    }
+    if (response.installed && state.settings) {
+      try {
+        const settingsResponse = await api.updateSettings({
+          ...state.settings,
+          transcription_provider: "local",
+        });
+        state.settings = settingsResponse.settings;
+        setTransientStatus("settingsSaveStatus", settingsResponse.message || "已切换为本地 ASR", { shouldRender: false });
+      } catch (error) {
+        setTransientStatus(
+          "localAsrActionStatus",
+          `本地 ASR 已安装，但切换默认转写方式失败：${error.message || "保存设置失败"}`,
+          { shouldRender: false },
+        );
+        render({ fullView: true });
+        return;
+      }
+    }
+    setTransientStatus("localAsrActionStatus", response.installed ? "本地语音识别环境已安装" : "本地语音识别环境安装失败", { shouldRender: false });
+  } catch (error) {
+    setTransientStatus("localAsrActionStatus", error.message || "本地语音识别环境安装失败", { shouldRender: false });
   }
   render({ fullView: true });
 }

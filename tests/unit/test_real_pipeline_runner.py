@@ -263,3 +263,16 @@ def test_transcribe_with_siliconflow_maps_auth_error(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(TranscriptionAuthenticationError, match="authentication failed"):
         runner._transcribe_with_siliconflow(audio_path, 10.0, lambda *_args, **_kwargs: None)
+
+
+def test_transcribe_with_local_asr_requires_installed_runtime() -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=Path("tests/tmp_tasks"),
+            transcription_provider="local",
+            local_asr_available=False,
+        )
+    )
+
+    with pytest.raises(TranscriptionConfigurationError, match="Install local ASR from Settings"):
+        runner._transcribe(Path("sample.mp3"), 10.0, lambda *_args, **_kwargs: None)

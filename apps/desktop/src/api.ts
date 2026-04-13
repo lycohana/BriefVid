@@ -133,6 +133,18 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  installLocalAsr(payload?: { reinstall?: boolean }) {
+    return fetchJson<{
+      installed: boolean;
+      runtimeChannel?: string;
+      stdoutTail?: string;
+      environment?: EnvironmentInfo;
+    }>("/api/v1/asr/local/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    });
+  },
   createTaskEventSource(taskId: string, after?: string | null) {
     const url = new URL(`/api/v1/tasks/${taskId}/events/stream`, window.location.origin);
     if (after) {

@@ -54,6 +54,9 @@ export function SettingsPage({
   const [cudaStage, setCudaStage] = useState("");
   const [cudaStartedAt, setCudaStartedAt] = useState<number | null>(null);
   const [cudaDetail, setCudaDetail] = useState("");
+  const [localAsrStatus, setLocalAsrStatus] = useState("");
+  const [localAsrOutput, setLocalAsrOutput] = useState("");
+  const [localAsrInstalling, setLocalAsrInstalling] = useState(false);
   const [logOutput, setLogOutput] = useState("");
   const [logPath, setLogPath] = useState(snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
   const [serviceStatus, setServiceStatus] = useState("");
@@ -108,7 +111,9 @@ export function SettingsPage({
   const llmReady = Boolean(form?.llm_enabled && form?.llm_api_key_configured);
   const autoMindMapReady = Boolean(form?.auto_generate_mindmap);
   const asrReady =
-    form?.transcription_provider !== "siliconflow" || Boolean(form?.siliconflow_asr_api_key_configured);
+    form?.transcription_provider === "local"
+      ? Boolean(environment?.localAsrAvailable)
+      : Boolean(form?.siliconflow_asr_api_key_configured);
   const updateUnsupported = isUpdateUnsupported(updateInfo);
   const updateStatusLabel = getUpdateStatusLabel(updateInfo);
   const updateStatusTone = getUpdateStatusTone(updateInfo);
@@ -148,6 +153,7 @@ export function SettingsPage({
   if (!form) return <section className="grid-card empty-state-card">正在加载设置...</section>;
 
   const usesSiliconFlowAsr = form.transcription_provider === "siliconflow";
+  const localAsrInstalled = Boolean(environment?.localAsrInstalled);
 
   function updateForm(next: ServiceSettings) {
     setIsDirty(true);
@@ -183,6 +189,40 @@ export function SettingsPage({
     }
   }
 
+  async function installLocalAsr() {
+    if (!form) return;
+    try {
+      setLocalAsrInstalling(true);
+      setLocalAsrStatus("正在安装本地语音识别环境...");
+      setLocalAsrOutput("");
+      const response = await api.installLocalAsr();
+      setLocalAsrStatus(response.installed ? "本地语音识别环境已安装" : "本地语音识别环境安装失败");
+      setLocalAsrOutput(response.stdoutTail || "");
+      const nextEnvironment = response.environment || (await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true }));
+      setEnvironment(nextEnvironment);
+      if (response.installed) {
+        try {
+          const settingsResponse = await api.updateSettings({
+            ...form,
+            transcription_provider: "local",
+            device_preference: normalizeDevicePreference(form.device_preference),
+          });
+          setForm(settingsResponse.settings);
+          setIsDirty(false);
+          setSaveStatus(settingsResponse.message || "已切换为本地 ASR");
+          onSettingsSaved(settingsResponse.settings, nextEnvironment);
+        } catch (error) {
+          setLocalAsrStatus(`本地 ASR 已安装，但切换默认转写方式失败：${error instanceof Error ? error.message : "保存设置失败"}`);
+        }
+      }
+      onRefresh();
+    } catch (error) {
+      setLocalAsrStatus(error instanceof Error ? error.message : "安装本地语音识别环境失败");
+    } finally {
+      setLocalAsrInstalling(false);
+    }
+  }
+
   const cudaPhaseItems = cudaPhasePlan.map((phase, index) => {
     const previousThreshold = index === 0 ? 0 : cudaPhasePlan[index - 1].threshold;
     const isComplete = cudaProgress >= phase.threshold;
@@ -199,6 +239,7 @@ export function SettingsPage({
         notices={[
           { id: "settings-save-status", message: saveStatus },
           { id: "settings-cuda-status", message: cudaStatus },
+          { id: "settings-local-asr-status", message: localAsrStatus },
           { id: "settings-backend-error", message: desktop.backend?.lastError || "", tone: "error" },
           { id: "settings-service-status", message: serviceStatus },
         ]}
@@ -329,7 +370,7 @@ export function SettingsPage({
                   </div>
                   <div className="settings-story-stat">
                     <span>转写</span>
-                    <strong>{form.transcription_provider === "siliconflow" ? "SiliconFlow API" : form.fixed_model}</strong>
+                    <strong>{form.transcription_provider === "siliconflow" ? "SiliconFlow API" : "本地 ASR"}</strong>
                   </div>
                   <div className="settings-story-stat">
                     <span>摘要模式</span>
@@ -402,7 +443,9 @@ export function SettingsPage({
                         ? asrReady
                           ? "硅基流动已配置"
                           : "硅基流动待补全"
-                        : "本地 faster-whisper"}
+                        : localAsrInstalled
+                          ? "本地 ASR 已安装"
+                          : "本地 ASR 未安装"}
                     </strong>
                   </div>
                 </div>
@@ -448,8 +491,10 @@ export function SettingsPage({
                     <span className="overview-info-value">{environment?.ytDlpVersion || "-"}</span>
                   </div>
                   <div className="overview-info-item">
-                    <span className="overview-info-label">faster-whisper</span>
-                    <span className="overview-info-value">{environment?.fasterWhisperVersion || "-"}</span>
+                    <span className="overview-info-label">本地 ASR</span>
+                    <span className={`overview-info-value ${environment?.localAsrInstalled ? "text-success" : ""}`}>
+                      {environment?.localAsrInstalled ? environment?.localAsrVersion || "已安装" : "未安装"}
+                    </span>
                   </div>
                   <div className="overview-info-item">
                     <span className="overview-info-label">FFmpeg</span>
@@ -476,7 +521,7 @@ export function SettingsPage({
                     <span className="overview-info-value">{form.language === "zh" ? "中文" : form.language === "en" ? "English" : "日本語"}</span>
                   </div>
                   <div className="overview-info-item">
-                    <span className="overview-info-label">Whisper 模型</span>
+                    <span className="overview-info-label">ASR 模型</span>
                     <span className="overview-info-value">{form.transcription_provider === "siliconflow" ? form.siliconflow_asr_model : form.fixed_model}</span>
                   </div>
                 </div>
@@ -545,16 +590,16 @@ export function SettingsPage({
             <section className="settings-category-section">
               <header className="settings-category-header">
                 <h2>模型设置</h2>
-                <p>本地 faster-whisper 与云端 SiliconFlow 语音识别配置。</p>
+                <p>配置转写方式、云端参数和本地模型策略。</p>
               </header>
               <div className="settings-form-group">
                 <label className="settings-input-group">
                   <span className="settings-input-label">转写方式</span>
                   <select className="settings-select-field" value={form.transcription_provider} onChange={(e) => updateForm({ ...form, transcription_provider: e.target.value })}>
-                    <option value="local">本地 faster-whisper</option>
                     <option value="siliconflow">硅基流动 API</option>
+                    <option value="local" disabled={!localAsrInstalled}>本地 ASR（需先安装）</option>
                   </select>
-                  <span className="settings-input-caption">本地模式依赖 CPU/GPU 运行时；云端模式通过 SiliconFlow 调用 TeleSpeechASR。</span>
+                  <span className="settings-input-caption">默认推荐云端模式。</span>
                 </label>
                 {usesSiliconFlowAsr ? (
                   <>
@@ -752,7 +797,7 @@ export function SettingsPage({
             <section className="settings-category-section">
               <header className="settings-category-header">
                 <h2>运行环境</h2>
-                <p>环境检测信息和 CUDA 配置。</p>
+                <p>环境检测信息、CUDA 配置和本地 ASR 安装。</p>
               </header>
               <div className="env-summary-grid settings-env-grid">
                 <div className="metric-card">
@@ -876,6 +921,24 @@ export function SettingsPage({
                   >
                     {cudaInstalling ? "安装中..." : "安装 CUDA 支持"}
                   </button>
+                </div>
+              </div>
+              <div className="settings-form-group">
+                <div className="settings-input-group">
+                  <span className="settings-input-label">本地 ASR 运行时</span>
+                  <div className="settings-actions">
+                    <button className="secondary-button" type="button" disabled={localAsrInstalling} onClick={() => void installLocalAsr()}>
+                      {localAsrInstalling ? "安装中..." : localAsrInstalled ? "重新安装本地 ASR" : "安装本地 ASR"}
+                    </button>
+                  </div>
+                  <span className="settings-input-caption">
+                    {localAsrInstalled
+                      ? `当前已安装${environment?.localAsrVersion ? `（${environment.localAsrVersion}）` : ""}，安装后会自动切换到本地模式。`
+                      : "正式安装包默认不包含本地 ASR；安装到当前运行时后会自动切换到本地模式。"}
+                  </span>
+                  {localAsrOutput ? (
+                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
+                  ) : null}
                 </div>
               </div>
               {(cudaInstalling || cudaProgress > 0 || cudaStatus) ? (

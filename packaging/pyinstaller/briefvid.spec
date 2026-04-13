@@ -25,6 +25,13 @@ RUNTIME_EXCLUDE_PACKAGES = [
     'typer',
     'pygments',
     'markdown_it_py',
+    # 本地 ASR 相关重依赖不再随基础包分发
+    'faster_whisper',
+    'ctranslate2',
+    'onnxruntime',
+    'tokenizers',
+    'huggingface_hub',
+    'hf_xet',
 ]
 
 def collect_runtime_files(source_dir: Path, dest_dir: str, exclude_packages: list[str]) -> list[tuple[str, str]]:
@@ -147,6 +154,13 @@ a = Analysis(
         'jax',
         'theano',
         'keras',
+        # 本地 ASR 默认改为按需安装
+        'faster_whisper',
+        'ctranslate2',
+        'onnxruntime',
+        'tokenizers',
+        'huggingface_hub',
+        'hf_xet',
     ],
     noarchive=False,
 )

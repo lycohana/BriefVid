@@ -8,6 +8,7 @@ from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
 from video_sum_infra.config import ServiceSettings, normalize_transcription_provider
 from video_sum_infra.runtime import default_data_dir
+from video_sum_service.settings_manager import SettingsManager
 
 
 def test_task_input_defaults() -> None:
@@ -67,6 +68,29 @@ def test_service_settings_supports_siliconflow_asr_defaults() -> None:
     assert settings.transcription_provider == "siliconflow"
     assert settings.siliconflow_asr_base_url == "https://api.siliconflow.cn/v1"
     assert settings.siliconflow_asr_model == "TeleAI/TeleSpeechASR"
+
+
+def test_service_settings_default_transcription_provider_is_siliconflow() -> None:
+    settings = ServiceSettings()
+
+    assert settings.transcription_provider == "siliconflow"
+
+
+def test_settings_manager_preserves_existing_local_provider(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text('{"transcription_provider":"local","fixed_model":"tiny"}', encoding="utf-8")
+
+    loaded = manager.load()
+
+    assert loaded.transcription_provider == "local"
+    assert loaded.fixed_model == "tiny"
 
 
 def test_service_settings_default_to_managed_user_data_dir() -> None:

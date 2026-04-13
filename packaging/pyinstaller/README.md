@@ -34,6 +34,7 @@ python .\packaging\pyinstaller\build_onedir.py
 
 - `onedir` 基础包默认只保证 CPU 路径可运行
 - 设置页的一键安装会把 CUDA 版 `torch` 装到用户目录下的 managed runtime
+- 本地 ASR 默认不随基础包分发；如用户需要，可在设置页按需安装到当前 runtime
 - 安装路径默认在 `%LOCALAPPDATA%/briefvid/runtime/gpu-cu12x`
 - 安装完成后需要重启应用生效
 

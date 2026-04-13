@@ -134,7 +134,9 @@ export type EnvironmentInfo = {
   cudaAvailable?: boolean;
   gpuName?: string;
   ytDlpVersion?: string;
-  fasterWhisperVersion?: string;
+  localAsrInstalled?: boolean;
+  localAsrAvailable?: boolean;
+  localAsrVersion?: string;
   ffmpegLocation?: string;
   recommendedModel?: string;
   recommendedDevice?: string;

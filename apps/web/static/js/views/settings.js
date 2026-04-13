@@ -61,7 +61,7 @@ export function renderSettingsView(state) {
             ${renderEnvCard("GPU 名称", env.gpuName || "未检测到", env.gpuName ? "success" : "neutral")}
             ${renderEnvCard("Torch", env.torchInstalled ? env.torchVersion || "已安装" : "未安装", env.torchInstalled ? "success" : "warning")}
             ${renderEnvCard("yt-dlp", env.ytDlpVersion || "未安装", env.ytDlpVersion ? "success" : "warning")}
-            ${renderEnvCard("faster-whisper", env.fasterWhisperVersion || "未安装", env.fasterWhisperVersion ? "success" : "warning")}
+            ${renderEnvCard("本地 ASR", env.localAsrInstalled ? (env.localAsrVersion || "已安装") : "未安装", env.localAsrInstalled ? "success" : "neutral")}
             ${renderEnvCard("FFmpeg", env.ffmpegLocation ? `已安装 (${escapeHtml(env.ffmpegLocation)})` : "未安装", env.ffmpegLocation ? "success" : "warning")}
             ${renderEnvCard("Python", env.pythonVersion || "-", "neutral")}
             ${renderEnvCard("运行时通道", env.runtimeChannel || settings.runtime_channel || "base", "neutral")}
@@ -116,6 +116,20 @@ export function renderSettingsView(state) {
               <textarea class="textarea-field log-viewer" rows="8" readonly>${escapeHtml(env.runtimeError)}</textarea>
             </label>
           ` : ''}
+          <label class="input-row">
+            <span class="input-label">本地 ASR 运行时</span>
+            <div class="settings-actions">
+              <button id="install-local-asr" class="secondary-button" type="button">安装本地 ASR</button>
+            </div>
+            <span class="input-caption">${env.localAsrInstalled ? `当前已安装 ${escapeHtml(env.localAsrVersion || "")}，安装后会自动切换到本地模式。` : "正式安装包默认不包含本地 ASR；安装到当前运行时后会自动切换到本地模式。"}</span>
+          </label>
+          ${renderStatusNotice(state.localAsrActionStatus, "localAsrActionStatus")}
+          ${state.localAsrInstallOutput ? `
+            <label class="input-row">
+              <span class="input-label">本地 ASR 安装输出</span>
+              <textarea class="textarea-field log-viewer" rows="8" readonly>${escapeHtml(state.localAsrInstallOutput)}</textarea>
+            </label>
+          ` : ""}
         </section>
       </article>
 
@@ -148,9 +162,9 @@ export function renderSettingsView(state) {
           <!-- 转写模型 -->
           <section class="settings-subsection">
             <h3>转写模型</h3>
-            ${renderSelect("transcription_provider", "转写方式", settings.transcription_provider || "local", [
-              { value: "local", label: "本地 faster-whisper" },
-              { value: "siliconflow", label: "硅基流动 API" }
+            ${renderSelect("transcription_provider", "转写方式", settings.transcription_provider || "siliconflow", [
+              { value: "siliconflow", label: "硅基流动 API" },
+              ...(env.localAsrInstalled ? [{ value: "local", label: "本地 ASR" }] : [])
             ])}
             ${renderSelect("device_preference", "推理设备", settings.device_preference || "cpu", [
               { value: "auto", label: "自动选择" },
@@ -250,9 +264,10 @@ export function renderSettingsView(state) {
         </div>
         <div class="setting-list">
           ${renderRow("LLM 启用", settings.llm_enabled ? "✓ 是" : "✗ 否", settings.llm_enabled ? "success" : "neutral")}
-          ${renderRow("转写方式", settings.transcription_provider === "siliconflow" ? "硅基流动 API" : "本地 faster-whisper", settings.transcription_provider === "siliconflow" ? "success" : "neutral")}
+          ${renderRow("转写方式", settings.transcription_provider === "siliconflow" ? "硅基流动 API" : "本地 ASR", settings.transcription_provider === "siliconflow" ? "success" : "neutral")}
           ${renderRow("SiliconFlow 模型", settings.siliconflow_asr_model || "-", settings.siliconflow_asr_model ? "success" : "neutral")}
           ${renderRow("SiliconFlow API Key", settings.siliconflow_asr_api_key_configured ? "✓ 已配置" : "✗ 未配置", settings.siliconflow_asr_api_key_configured ? "success" : "warning")}
+          ${renderRow("本地 ASR", env.localAsrInstalled ? `✓ 已安装${env.localAsrVersion ? ` (${env.localAsrVersion})` : ""}` : "✗ 未安装", env.localAsrInstalled ? "success" : "neutral")}
           ${renderRow("LLM Base URL", settings.llm_base_url || "-", settings.llm_base_url ? "success" : "neutral")}
           ${renderRow("LLM 模型", settings.llm_model || "-", settings.llm_model ? "success" : "neutral")}
           ${renderRow("运行时通道", settings.runtime_channel || "base", "neutral")}
