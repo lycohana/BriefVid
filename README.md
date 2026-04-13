@@ -1,100 +1,139 @@
-# BriefVid
+<div align="center">
+
+![BriefVid Banner](docs/pic/banner.svg)
+
+**本地优先的视频知识工作台**
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](#)
 
-本地优先的视频知识工作台。输入 B 站视频链接，自动完成探测、下载、转写、结构化摘要，并把结果整理成可回看、可复用的知识卡片与任务历史。
+[快速开始](#-快速开始) · [产品特性](#-产品特性) · [技术栈](#️-技术栈) · [贡献指南](#-贡献指南)
 
-![BriefVid 首页](docs/pic/mainpage.png)
-![BriefVid 视频详情页](docs/pic/videopage.png)
+</div>
 
-## 产品定位
+---
 
-BriefVid 不是单纯的“字幕转写工具”，也不是只返回一段泛泛摘要的 LLM Demo。
+> 输入一个 B 站视频链接，收获的不仅是字幕和摘要，而是一套可回溯、可复用、可生长的知识体系。
 
-它更像一个围绕视频内容整理建立的个人知识工作台：
+## 🌟 为什么需要 BriefVid
 
-- 一次导入视频，沉淀为本地视频库
-- 一次处理任务，沉淀为可追溯的转写、摘要和章节结构
-- 同一个视频，可以反复刷新信息、重新转写、只重跑摘要
-- 所有结果默认落本地，便于归档、复查和后续二次处理
+市面上的视频转写工具不少，但大多止步于"把话说完"——丢给你一段 transcript，或者一段泛泛的摘要。
 
-## 核心能力
+**BriefVid 想做得更多：**
 
-- 视频探测与入库：解析 B 站链接，缓存封面、标题、时长等元数据
-- 后台任务处理：下载音频、执行转写、生成结构化摘要，并保存完整任务历史
-- 知识卡片视图：将概览、要点、章节拆成适合阅读和复用的内容单元
-- 摘要结果视图：保留更完整的概览、时间轴和全文转写
-- 任务版本管理：支持查看历史版本、删除任务、刷新源站信息
-- 双重重跑机制：
-  - `重新生成摘要`：复用现有转写与分段，只重新调用 LLM
-  - `重新转写生成摘要`：重新抓取音频、重新转写，再生成新摘要
-- 实时进度反馈：通过 REST + SSE 同步任务状态与阶段事件
-- 本地优先部署：桌面端可直接拉起本地服务，Windows 分发不依赖用户预装 Python
+- 📚 **不止是转写** —— 自动拆解章节、提炼要点，生成结构化的知识卡片
+- 🗃️ **沉淀为资产** —— 每个视频都是一条可追溯的知识条目，附带完整任务历史
+- 🔄 **可反复打磨** —— 转写不满意？重新跑。摘要不够好？换套模型再来
+- 🏠 **本地优先** —— 数据落本地，隐私可控，断网也能用
 
-## 适合谁
+## 📸 产品速览
 
-- 想把长视频整理成结构化知识的人
-- 需要快速回顾视频重点、章节推进和原始转写的人
-- 想把视频内容纳入个人资料库、本地知识库或后续工作流的人
+### 知识卡片视图
 
-## 产品结构
+<div align="center">
+  <img src="docs/pic/cardpage.png" alt="BriefVid 知识卡片" width="800"/>
+  <p><i>核心概览 + 关键要点 + 章节时间轴，三栏布局清晰呈现</i></p>
+</div>
 
-### 1. 视频库
+### 笔记视图
 
-统一管理已探测和已处理的视频资源，保留封面、状态、最新任务结果和更新时间。
+<div align="center">
+  <img src="docs/pic/notepage.png" alt="BriefVid 笔记视图" width="800"/>
+  <p><i>完整转写内容，支持数学公式、代码块等富文本格式</i></p>
+</div>
 
-### 2. 视频详情页
+### 思维导图视图
 
-围绕单个视频构建完整工作台：
+<div align="center">
+  <img src="docs/pic/mindmappage.png" alt="BriefVid 思维导图" width="800"/>
+  <p><i>放射状知识网络，内容结构和逻辑脉络一目了然</i></p>
+</div>
 
-- 左侧查看核心概览和内嵌播放器
-- 右侧阅读关键要点
-- 下方浏览章节卡片并回跳播放器时间点
-- 顶部切换知识卡片、摘要结果、思维导图入口
-- 悬浮任务面板中查看实时进度与版本历史
+### 视频库首页
 
-### 3. 设置页
+<div align="center">
+  <img src="docs/pic/mainpage.png" alt="BriefVid 首页" width="800"/>
+  <p><i>统一管理已探测和已处理的视频</i></p>
+</div>
 
-集中管理云端 ASR、本地运行时、CUDA 安装、服务日志与本地服务状态。
+## ✨ 产品特性
 
-## 技术栈
+### 核心工作流
 
-| 模块 | 技术 |
-| --- | --- |
-| Desktop | Electron |
-| Frontend | React + TypeScript + Vite |
-| Backend | FastAPI |
-| Database | SQLite |
-| Download | `yt-dlp` |
-| Transcription | SiliconFlow ASR / 按需安装本地 ASR |
-| Summarization | OpenAI-compatible API / 本地规则降级 |
-| Packaging | PyInstaller onedir |
+```
+B 站链接 → 视频探测 → 下载/转写 → 结构化摘要 → 知识卡片
+              ↓                              ↓
+          元数据缓存                    可回溯的任务历史
+```
 
-## 快速开始
+### 亮点能力
+
+- **🧠 智能摘要引擎**
+  - 不只是压缩内容，而是提炼知识骨架
+  - 自动识别视频中的核心论点、案例和结论
+  - 支持重新生成摘要，换套模型换个视角
+
+- **📈 思维导图视图** ✅
+  - 把线性视频转换成放射状知识网络
+  - 一眼看清内容结构和逻辑脉络
+  - 支持缩放、拖拽、节点高亮互动
+
+- **⚡ 学习效率倍增**
+  - 1 小时视频 → 5 分钟快速掌握核心
+  - 章节时间轴 + 关键句高亮，精准定位
+  - 支持倍速浏览文字稿，比看字幕快 3 倍
+
+- **🗃️ 可生长的知识库**
+  - 每个视频都是一条结构化知识卡片
+  - 支持标签分类、全文检索
+  - 未来可接入 Obsidian / Logseq
+
+- **📝 完整笔记视图**
+  - 逐字稿全文展示，支持搜索定位
+  - 数学公式、代码块自动格式化
+  - 保留原始语境，方便深度复查
+
+- **🔄 灵活重跑机制**
+  - `重新生成摘要`：复用转写，只重跑 LLM
+  - `重新转写`：从音频开始全部重来
+
+- **📊 实时进度透视**
+  - REST + SSE 双通道同步任务状态
+  - 每个阶段在做什么，清清楚楚
+
+- **📄 分 P 视频支持**
+  - 自动检测多 P 视频，支持选择单个分 P 总结
+  - 也可分别处理多个分 P，独立生成摘要
+
+## 🛠️ 技术栈
+
+| 模块 | 技术选型 |
+|------|----------|
+| 桌面端 | Electron + React + TypeScript + Vite |
+| 后端服务 | FastAPI + SQLite |
+| 视频下载 | yt-dlp |
+| 语音转写 | SiliconFlow ASR / 本地 Whisper（可选） |
+| 摘要生成 | OpenAI-compatible API / 本地规则降级 |
+| 思维导图 | ReactFlow |
+| 打包分发 | PyInstaller onedir + electron-builder |
+
+## 🚀 快速开始
 
 ### 环境要求
 
-- Python `3.12`
-- Node.js `20+`
-- Windows 开发和打包环境最佳
-- 建议可用 `ffmpeg`
-- 如需 LLM 摘要，需要可用的 OpenAI-compatible 接口
+- Python **3.12**
+- Node.js **20+**
+- Windows 环境体验最佳
+- 可选：`ffmpeg`、CUDA（本地 ASR 加速）
 
 ### 安装依赖
 
-推荐：
-
 ```powershell
+# 推荐：使用 uv
 uv sync --python 3.12 --all-packages
-npm install --prefix .\apps\desktop
-```
 
-兼容方式：
-
-```powershell
-python -m pip install -e .\packages\infra -e .\packages\core -e .\apps\service
+# 安装前端依赖
 npm install --prefix .\apps\desktop
 ```
 
@@ -104,39 +143,25 @@ npm install --prefix .\apps\desktop
 Copy-Item .env.example .env
 ```
 
-示例：
+编辑 `.env`，填入你的 API Key：
 
 ```env
+# 服务配置
 VIDEO_SUM_HOST=127.0.0.1
 VIDEO_SUM_PORT=3838
+
+# 转写服务（SiliconFlow）
 VIDEO_SUM_TRANSCRIPTION_PROVIDER=siliconflow
-VIDEO_SUM_WHISPER_MODEL=tiny
-VIDEO_SUM_WHISPER_DEVICE=cpu
-VIDEO_SUM_WHISPER_COMPUTE_TYPE=int8
 VIDEO_SUM_SILICONFLOW_ASR_BASE_URL=https://api.siliconflow.cn/v1
 VIDEO_SUM_SILICONFLOW_ASR_MODEL=TeleAI/TeleSpeechASR
-VIDEO_SUM_SILICONFLOW_ASR_API_KEY=replace-with-your-siliconflow-api-key
+VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-siliconflow-api-key
+
+# LLM 摘要（可选，支持任意 OpenAI-compatible 接口）
 VIDEO_SUM_LLM_ENABLED=true
-VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1
-VIDEO_SUM_LLM_MODEL=qwen3.5-plus
-VIDEO_SUM_LLM_API_KEY=replace-with-your-api-key
+VIDEO_SUM_LLM_BASE_URL=https://api.siliconflow.cn/v1
+VIDEO_SUM_LLM_MODEL=qwen-plus
+VIDEO_SUM_LLM_API_KEY=your-llm-api-key
 ```
-
-默认发包仅内置 SiliconFlow 转写；如需改用云端语音识别：
-
-```env
-VIDEO_SUM_TRANSCRIPTION_PROVIDER=siliconflow
-VIDEO_SUM_SILICONFLOW_ASR_BASE_URL=https://api.siliconflow.cn/v1
-VIDEO_SUM_SILICONFLOW_ASR_MODEL=TeleAI/TeleSpeechASR
-VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-api-key
-```
-
-说明：
-
-- 当前首批支持 `TeleAI/TeleSpeechASR`
-- SiliconFlow 转写接口返回纯文本时，BriefVid 会自动补建分段与时间轴，保证后续摘要链路可直接使用
-- 本地 ASR 默认不随安装包分发，可在设置页按需安装到当前运行时
-- 如果暂时不想接 LLM，可将 `VIDEO_SUM_LLM_ENABLED=false`，系统会回退到本地规则摘要
 
 ### 启动开发环境
 
@@ -144,101 +169,83 @@ VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-api-key
 npm run dev
 ```
 
-这条命令会同时启动：
-
+这条命令会同时拉起：
 - Vite 渲染层
 - Electron 桌面壳
-- 本地 Python 后端服务
+- Python 后端服务
 
-如果只想单独启动后端：
-
-```powershell
-python -m video_sum_service
-```
-
-或：
-
-```powershell
-.\scripts\run_service.ps1
-```
-
-## 常用接口
-
-### 系统与设置
-
-- `GET /health`
-- `GET /api/v1/system/info`
-- `GET /api/v1/environment`
-- `GET /api/v1/settings`
-- `PUT /api/v1/settings`
-- `POST /api/v1/cuda/install`
-
-### 视频与任务
-
-- `POST /api/v1/videos/probe`
-- `GET /api/v1/videos`
-- `GET /api/v1/videos/{video_id}`
-- `DELETE /api/v1/videos/{video_id}`
-- `GET /api/v1/videos/{video_id}/tasks`
-- `POST /api/v1/videos/{video_id}/tasks`
-- `POST /api/v1/videos/{video_id}/tasks/resummary`
-- `GET /api/v1/tasks/{task_id}/result`
-- `GET /api/v1/tasks/{task_id}/events`
-- `GET /api/v1/tasks/{task_id}/events/stream`
-- `DELETE /api/v1/tasks/{task_id}`
-
-## 输出结果
-
-每个任务都会在本地生成可复用结果文件：
-
-- `transcript.txt`
-- `summary.json`
-
-其中 `summary.json` 同时包含：
-
-- 标题
-- 结构化摘要
-- 分段信息
-
-这也是“只重新生成摘要”能力可以复用已有文本和分段的基础。
-
-## Windows 打包
-
-构建完整桌面包：
+### 桌面端打包
 
 ```powershell
 npm run package:win
 ```
 
-或：
+## 📦 项目结构
 
-```powershell
-npm run build:win
+```
+bilibili_sum/
+├── apps/
+│   ├── desktop/       # Electron + React 桌面端
+│   │   ├── src/
+│   │   │   ├── pages/      # 页面组件（首页/视频库/详情页/设置）
+│   │   │   ├── components/ # 通用 UI 组件
+│   │   │   ├── api.ts      # API 客户端
+│   │   │   └── appModel.ts # 状态管理
+│   │   └── build/          # 构建产物
+│   └── service/       # FastAPI 本地服务
+│       └── src/
+│           └── video_sum_service/
+│               ├── app.py         # FastAPI 应用入口
+│               ├── main.py        # 服务启动逻辑
+│               ├── worker.py      # 后台任务执行器
+│               ├── repository.py  # SQLite 数据持久化
+│               └── schemas.py     # API 数据模型
+├── packages/
+│   ├── core/          # 下载、转写、摘要核心逻辑
+│   │   └── src/video_sum_core/
+│   │       ├── pipeline/   # 流程编排
+│   │       └── models/     # 领域模型
+│   └── infra/         # 配置、运行时、基础设施
+│       └── src/video_sum_infra/
+│           ├── config/   # 配置管理
+│           └── runtime/  # 运行时引导
+├── docs/pic/          # 文档资源
+├── scripts/           # PowerShell 工具脚本
+├── build/pyinstaller/ # PyInstaller 打包配置
+└── .env.example       # 环境变量模板
 ```
 
-## 项目结构
+## 🤝 贡献指南
 
-```text
-apps/
-  desktop/   Electron + React 桌面端
-  service/   FastAPI 本地服务
-packages/
-  core/      下载、转写、摘要核心流程
-  infra/     配置、运行时、基础设施
-docs/
-  pic/       README 截图等文档资源
-scripts/
-  *.ps1      常用开发脚本
-```
+欢迎以任意方式参与 BriefVid 的成长：
 
-## 路线方向
+### 你可以贡献什么
 
-- 更完整的思维导图视图
-- 更细粒度的知识卡片导出
-- 更多视频来源支持
-- 更稳定的 GPU 与运行时管理
-- 更完整的本地知识库工作流接入
+- 🐛 **提交 Issue**：遇到 Bug 或有功能建议，直接开 Issue
+- 🔧 **提交 PR**：修复 Bug、新增功能、优化体验均可
+- 📝 **完善文档**：补充使用说明、优化文案、增加示例
+- 💡 **分享用例**：在你的工作流中使用 BriefVid，欢迎分享经验
 
-## License
 
-MIT
+### 代码风格
+
+- Python：遵循 PEP 8，类型注解优先
+- TypeScript：严格模式，React 组件使用函数式写法
+- Commit 信息：参考 [Conventional Commits](https://www.conventionalcommits.org/)
+
+## 🔮 路线图
+
+- [x] 思维导图视图
+- [ ] 更多视频平台支持（YouTube、本地文件）
+- [ ] 知识卡片导出为 Markdown / Notion
+- [ ] 与 Obsidian / Logseq 等知识管理工具集成
+- [x] GPU 运行时一键安装与管理
+
+## 📄 License
+
+MIT License © 2026 Lycohana
+
+
+<div align="center">
+  <sub>Built with ❤️ by Lycohana</sub>
+</div>
