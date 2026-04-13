@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import type { UpdateState } from "../appModel";
+
 export function TitleBar({
   darkMode,
   onToggleTheme,
@@ -7,6 +9,7 @@ export function TitleBar({
   backendRunning,
   runtimeDeviceLabel,
   version,
+  updateState,
 }: {
   darkMode: boolean;
   onToggleTheme(): void;
@@ -14,6 +17,7 @@ export function TitleBar({
   backendRunning?: boolean;
   runtimeDeviceLabel: string;
   version: string;
+  updateState: UpdateState;
 }) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
@@ -61,6 +65,15 @@ export function TitleBar({
   };
 
   const serviceStatusText = serviceOnline ? "在线" : backendRunning ? "启动中" : "离线";
+  const hasNewVersion = ["available", "downloading", "downloaded", "installing"].includes(updateState.status);
+  const statusPillText = hasNewVersion ? "有新版本" : "运行状态";
+  const updateStatusText = hasNewVersion
+    ? `v${updateState.version || "-"}`
+    : updateState.status === "checking"
+      ? "检查中"
+      : updateState.status === "error"
+        ? "检查失败"
+        : "已是最新";
 
   return (
     <div className="title-bar">
@@ -79,15 +92,15 @@ export function TitleBar({
           onMouseLeave={() => setStatusPopoverOpen(false)}
         >
           <button
-            className={`title-bar-status-pill ${serviceOnline ? "is-success" : ""}`}
+            className={`title-bar-status-pill ${hasNewVersion ? "is-update" : serviceOnline ? "is-success" : ""}`}
             type="button"
             onClick={() => setStatusPopoverOpen((current) => !current)}
             aria-label="查看运行状态"
             aria-expanded={statusPopoverOpen}
             title="运行状态"
           >
-            <span className={`title-bar-status-dot ${serviceOnline ? "is-success" : backendRunning ? "is-pending" : ""}`} />
-            <span>运行状态</span>
+            <span className={`title-bar-status-dot ${hasNewVersion ? "is-update" : serviceOnline ? "is-success" : backendRunning ? "is-pending" : ""}`} />
+            <span>{statusPillText}</span>
           </button>
 
           <div className={`title-bar-status-popover ${statusPopoverOpen ? "is-visible" : ""}`} role="dialog" aria-label="运行状态详情">
@@ -98,6 +111,10 @@ export function TitleBar({
               <div className={`sidebar-status-item ${serviceOnline ? "is-success" : ""}`}>
                 <span>服务</span>
                 <strong>{serviceStatusText}</strong>
+              </div>
+              <div className={`sidebar-status-item ${hasNewVersion ? "is-update" : ""}`}>
+                <span>更新</span>
+                <strong>{updateStatusText}</strong>
               </div>
               <div className="sidebar-status-item">
                 <span>设备</span>

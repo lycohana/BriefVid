@@ -1,7 +1,7 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { deriveRuntimeDeviceLabel, emptySnapshot, getUpdateDialogSignal, isUpdateUnsupported, toUpdateState, type DesktopState, type LibraryFilter, type Snapshot, type UpdateState } from "./appModel";
+import { deriveRuntimeDeviceLabel, emptySnapshot, isUpdateUnsupported, toUpdateState, type DesktopState, type LibraryFilter, type Snapshot, type UpdateState } from "./appModel";
 import { api } from "./api";
 import { HomeIcon, LibraryIcon, SettingsIcon } from "./components/AppIcons";
 import { MultiPageSelectDialog } from "./components/MultiPageSelectDialog";
@@ -56,8 +56,6 @@ export function App() {
     downloadProgress: 0,
     errorMessage: null,
   });
-  const dismissedUpdateDialogSignalRef = useRef<string | null>(null);
-  const lastAutoOpenedUpdateDialogSignalRef = useRef<string | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
@@ -130,37 +128,11 @@ export function App() {
     };
   }, [refreshSeed]);
 
-  useEffect(() => {
-    const signal = getUpdateDialogSignal(updateState);
-    if (!signal) {
-      lastAutoOpenedUpdateDialogSignalRef.current = null;
-      return;
-    }
-    if (updateDialogOpen) {
-      lastAutoOpenedUpdateDialogSignalRef.current = signal;
-      return;
-    }
-    if (dismissedUpdateDialogSignalRef.current === signal) {
-      return;
-    }
-    if (lastAutoOpenedUpdateDialogSignalRef.current === signal) {
-      return;
-    }
-    lastAutoOpenedUpdateDialogSignalRef.current = signal;
-    setUpdateDialogOpen(true);
-  }, [updateDialogOpen, updateState.status, updateState.version]);
-
   function openUpdateDialog() {
-    const signal = getUpdateDialogSignal(updateState);
-    if (signal) {
-      dismissedUpdateDialogSignalRef.current = null;
-      lastAutoOpenedUpdateDialogSignalRef.current = signal;
-    }
     setUpdateDialogOpen(true);
   }
 
   function closeUpdateDialog() {
-    dismissedUpdateDialogSignalRef.current = getUpdateDialogSignal(updateState);
     setUpdateDialogOpen(false);
   }
 
@@ -310,6 +282,7 @@ export function App() {
         backendRunning={desktop.backend?.running}
         runtimeDeviceLabel={runtimeDeviceLabel}
         version={runtimeVersionLabel}
+        updateState={updateState}
       />
       <aside className="sidebar">
         <nav className="nav">

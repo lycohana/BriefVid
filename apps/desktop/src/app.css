@@ -314,6 +314,12 @@ textarea {
   background: var(--bg-subtle);
 }
 
+.title-bar-status-pill.is-update {
+  color: var(--brand-700);
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--brand-100) 78%, var(--bg-elevated) 22%);
+}
+
 .title-bar-status-pill:active {
   transform: scale(0.98);
 }
@@ -335,6 +341,11 @@ textarea {
 .title-bar-status-dot.is-pending {
   background: var(--warning);
   color: var(--warning);
+}
+
+.title-bar-status-dot.is-update {
+  background: var(--brand-500);
+  color: var(--brand-500);
 }
 
 .title-bar-status-popover {
@@ -680,6 +691,14 @@ textarea {
 
 .sidebar-status-item.is-success span {
   color: var(--success);
+}
+
+.sidebar-status-item.is-update {
+  background: color-mix(in srgb, var(--brand-50) 72%, var(--bg-card) 28%);
+}
+
+.sidebar-status-item.is-update span {
+  color: var(--brand-600);
 }
 
 .status-dot {
