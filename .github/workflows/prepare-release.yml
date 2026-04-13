@@ -228,17 +228,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: dist/release-assets
 
+      - name: Generate release notes
+        run: |
+          python scripts/generate_release_notes.py \
+            --version "${{ needs.detect-release.outputs.next_version }}" \
+            --repo "${{ github.repository }}" \
+            --output dist/release-notes.md \
+            --target-ref "v${{ needs.detect-release.outputs.next_version }}"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.detect-release.outputs.next_version }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
             dist/release-assets/BriefVid-*-Setup.exe
             dist/release-assets/BriefVid-*-Setup.exe.blockmap
