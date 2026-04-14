@@ -76,6 +76,11 @@
   --settings-shadow-strong: 0 18px 40px rgba(24, 24, 27, 0.08);
   --settings-accent-bg: rgba(251, 114, 153, 0.08);
   --settings-accent-border: rgba(251, 114, 153, 0.18);
+  --mindmap-canvas-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 88%, white 12%), var(--bg-card));
+  --mindmap-canvas-border: var(--border-subtle);
+  --mindmap-canvas-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52);
+  --mindmap-control-bg: color-mix(in srgb, var(--bg-card) 92%, white 8%);
+  --mindmap-control-hover-bg: var(--bg-subtle);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -150,6 +155,17 @@
   --settings-shadow-strong: 0 24px 56px rgba(0, 0, 0, 0.34);
   --settings-accent-bg: rgba(251, 114, 153, 0.12);
   --settings-accent-border: rgba(251, 114, 153, 0.24);
+  --mindmap-canvas-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-card) 94%, var(--bg-subtle) 6%),
+    color-mix(in srgb, var(--bg-base) 78%, var(--bg-card) 22%)
+  );
+  --mindmap-canvas-border: color-mix(in srgb, var(--border-subtle) 82%, rgba(255, 255, 255, 0.04) 18%);
+  --mindmap-canvas-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  --mindmap-control-bg: color-mix(in srgb, var(--bg-card) 88%, var(--bg-elevated) 12%);
+  --mindmap-control-hover-bg: color-mix(in srgb, var(--bg-elevated) 74%, var(--bg-subtle) 26%);
 }
 
 *,
@@ -2862,10 +2878,9 @@ textarea {
   max-height: 78vh;
   overflow: hidden;
   border-radius: var(--radius-2xl);
-  border: 1px solid var(--border-subtle);
-  background:
-    radial-gradient(circle at top, color-mix(in srgb, var(--brand-500) 7%, transparent), transparent 48%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 88%, white 12%), var(--bg-card));
+  border: 1px solid var(--mindmap-canvas-border);
+  background: var(--mindmap-canvas-bg);
+  box-shadow: var(--mindmap-canvas-shadow);
 }
 
 .detail-mindmap-flow-shell {
@@ -2900,16 +2915,18 @@ textarea {
   border-radius: 14px;
   overflow: hidden;
   box-shadow: var(--shadow-sm);
+  background: var(--mindmap-control-bg);
+  backdrop-filter: blur(14px);
 }
 
 .detail-mindmap-flow-shell .react-flow__controls-button {
-  background: var(--bg-card);
+  background: var(--mindmap-control-bg);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
 
 .detail-mindmap-flow-shell .react-flow__controls-button:hover {
-  background: var(--bg-subtle);
+  background: var(--mindmap-control-hover-bg);
   color: var(--text-primary);
 }
 
