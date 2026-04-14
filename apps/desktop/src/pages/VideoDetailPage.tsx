@@ -22,6 +22,7 @@ import {
 } from "../detailModel";
 import type { MindMapNode, TaskDetail, TaskEvent, TaskMindMapResponse, TaskStatus, TaskSummary, VideoAssetDetail } from "../types";
 import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents, taskStatusLabel } from "../utils";
+import { buildPlayerEmbedDescriptor, withPlayerSeek } from "../videoPlayer";
 
 type TaskContext = {
   detail: TaskDetail;
@@ -146,55 +147,6 @@ function buildTaskSnapshot(task?: Pick<TaskSummary, "created_at" | "updated_at" 
     { label: "LLM Token", value: formatTokenCount(task.llm_total_tokens) },
     { label: "任务耗时", value: formatTaskDuration(task.task_duration_seconds) },
   ];
-}
-
-function buildBilibiliEmbedUrl(sourceUrl?: string | null) {
-  if (!sourceUrl) {
-    return null;
-  }
-
-  try {
-    const url = new URL(sourceUrl);
-    const host = url.hostname.toLowerCase();
-    if (!host.includes("bilibili.com") && !host.includes("b23.tv")) {
-      return null;
-    }
-
-    const bvidFromPath = url.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] ?? null;
-    const aidFromPath = url.pathname.match(/\/video\/av(\d+)/i)?.[1] ?? null;
-    const bvid = url.searchParams.get("bvid") ?? bvidFromPath;
-    const aid = url.searchParams.get("aid") ?? aidFromPath;
-    const page = url.searchParams.get("p") ?? "1";
-
-    if (!bvid && !aid) {
-      return null;
-    }
-
-    const embedUrl = new URL("https://player.bilibili.com/player.html");
-    embedUrl.searchParams.set("isOutside", "true");
-    embedUrl.searchParams.set("autoplay", "0");
-    embedUrl.searchParams.set("p", page);
-    if (bvid) {
-      embedUrl.searchParams.set("bvid", bvid);
-    }
-    if (aid) {
-      embedUrl.searchParams.set("aid", aid);
-    }
-    return embedUrl.toString();
-  } catch {
-    return null;
-  }
-}
-
-function withBilibiliPlayerSeek(embedUrl: string, seconds: number | null, nonce: number) {
-  const url = new URL(embedUrl);
-  if (seconds != null && Number.isFinite(seconds) && seconds >= 0) {
-    url.searchParams.set("t", String(Math.floor(seconds)));
-  } else {
-    url.searchParams.delete("t");
-  }
-  url.searchParams.set("_ts", String(nonce));
-  return url.toString();
 }
 
 function clampFloatingPlayerWidth(width: number, viewportWidth: number) {
@@ -849,13 +801,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     { id: "progress", label: "最新运行", value: heroProgressSummary },
     { id: "content", label: "当前查看", value: currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
   ];
-  const bilibiliEmbedBaseUrl = buildBilibiliEmbedUrl(currentPage?.source_url || video?.source_url);
-  const bilibiliEmbedUrl = useMemo(() => {
-    if (!bilibiliEmbedBaseUrl) {
+  const playerDescriptor = useMemo(
+    () => buildPlayerEmbedDescriptor(currentPage?.source_url || video?.source_url),
+    [currentPage?.source_url, video?.source_url],
+  );
+  const playerEmbedUrl = useMemo(() => {
+    if (!playerDescriptor) {
       return null;
     }
-    return withBilibiliPlayerSeek(bilibiliEmbedBaseUrl, playerSeekTarget.seconds, playerSeekTarget.nonce);
-  }, [bilibiliEmbedBaseUrl, playerSeekTarget]);
+    return withPlayerSeek(playerDescriptor.embedUrl, playerDescriptor.platform, playerSeekTarget.seconds, playerSeekTarget.nonce);
+  }, [playerDescriptor, playerSeekTarget]);
   const readyMindMap = selectedMindMap?.status === "ready" && selectedTaskDetail?.result?.mindmap_status !== "generating"
     ? selectedMindMap.mindmap ?? null
     : null;
@@ -939,7 +894,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   }, [readyMindMapRoot]);
 
   function handleSeekToChapter(seconds: number | null) {
-    if (!bilibiliEmbedBaseUrl || seconds == null) {
+    if (!playerDescriptor || seconds == null) {
       return;
     }
     setPlayerSeekTarget((current) => ({ nonce: current.nonce + 1, seconds }));
@@ -1481,11 +1436,11 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       </div>
                       <h4 className="detail-section-title">{overviewCard?.title || "核心概览"}</h4>
                       {overviewCard?.content ? <MarkdownContent className="detail-section-body markdown-content-body" compact content={overviewCard.content} /> : <p className="detail-section-body">当前任务还没有生成核心概览。</p>}
-                      {bilibiliEmbedUrl ? (
+                      {playerEmbedUrl && playerDescriptor ? (
                         <div className="detail-overview-player" ref={playerFrameRef}>
                           <div className="detail-section-heading">
                             <h3 className="detail-section-label">Player</h3>
-                            <a className="detail-section-meta detail-section-link" href={currentPage?.source_url || video.source_url} target="_blank" rel="noreferrer">在 Bilibili 打开</a>
+                            <a className="detail-section-meta detail-section-link" href={playerDescriptor.sourceUrl} target="_blank" rel="noreferrer">{playerDescriptor.openLabel}</a>
                           </div>
                           <div className="detail-video-embed-frame">
                             <iframe
@@ -1494,7 +1449,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               className="detail-video-embed"
                               referrerPolicy="strict-origin-when-cross-origin"
                               scrolling="no"
-                              src={bilibiliEmbedUrl}
+                              src={playerEmbedUrl}
                               title={`${video.title} 播放器`}
                             />
                             <div className="detail-video-export-mask" aria-hidden="true">
@@ -1575,7 +1530,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                       card={card}
                                       index={index}
                                       key={card.id}
-                                      onSeekToTimestamp={bilibiliEmbedBaseUrl ? handleSeekToChapter : undefined}
+                                      onSeekToTimestamp={playerDescriptor ? handleSeekToChapter : undefined}
                                     />
                                   ))}
                                 </div>
@@ -1662,7 +1617,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                 <span className="detail-mindmap-inspector-kicker">{formatMindMapNodeType(selectedMindMapNode.type)}</span>
                                 <h4>{sanitizeMindMapLabel(selectedMindMapNode.label, selectedMindMapNode.summary)}</h4>
                               </div>
-                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && bilibiliEmbedBaseUrl ? (
+                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && playerDescriptor ? (
                                 <button
                                   className="detail-mindmap-seek-button"
                                   type="button"
@@ -1680,7 +1635,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               <div className="detail-mindmap-inspector-tags">
                                 {selectedMindMapNode.source_chapter_titles.slice(0, 3).map((title: string, index: number) => {
                                   const timestamp = selectedMindMapNode.source_chapter_starts[index] ?? null;
-                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && Boolean(bilibiliEmbedBaseUrl);
+                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && Boolean(playerDescriptor);
                                   const label = `${title}${shouldDisplayMindMapTimestamp(timestamp) ? ` · ${formatDuration(timestamp!)}` : ""}`;
 
                                   if (canSeek) {
@@ -1781,10 +1736,11 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               </section>
             ) : null}
 
-            {bilibiliEmbedUrl && (activeTab === "summary" || activeTab === "mindmap") ? (
-              <FloatingBilibiliPlayer
-                embedUrl={bilibiliEmbedUrl}
-                sourceUrl={currentPage?.source_url || video.source_url}
+            {playerEmbedUrl && playerDescriptor && (activeTab === "summary" || activeTab === "mindmap") ? (
+              <FloatingVideoPlayer
+                embedUrl={playerEmbedUrl}
+                openLabel={playerDescriptor.openLabel}
+                sourceUrl={playerDescriptor.sourceUrl}
                 title={video.title}
               />
             ) : null}
@@ -2176,12 +2132,14 @@ const mindMapNodeTypes = {
   mindmap: MindMapFlowNode,
 };
 
-function FloatingBilibiliPlayer({
+function FloatingVideoPlayer({
   embedUrl,
+  openLabel,
   sourceUrl,
   title,
 }: {
   embedUrl: string;
+  openLabel: string;
   sourceUrl: string;
   title: string;
 }) {
@@ -2287,7 +2245,7 @@ function FloatingBilibiliPlayer({
           rel="noreferrer"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          在 Bilibili 打开
+          {openLabel}
         </a>
       </div>
       <div className="detail-video-embed-frame detail-video-embed-frame-floating">

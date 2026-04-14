@@ -7,6 +7,7 @@ from video_sum_core.errors import (
     LLMAuthenticationError,
     TranscriptionAuthenticationError,
     TranscriptionConfigurationError,
+    UnsupportedInputError,
 )
 from video_sum_core.models.tasks import InputType
 from video_sum_core.pipeline.base import PipelineContext
@@ -303,6 +304,81 @@ def test_preflight_checks_llm_before_full_run(monkeypatch: pytest.MonkeyPatch) -
     assert "正在检查 LLM API 是否可用" in events[0][2]
     assert events[-1][0] == "preflight"
     assert "LLM API 检查通过" in events[-1][2]
+
+
+def test_run_from_url_accepts_youtube_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path))
+    emitted: list[tuple[str, int, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(runner, "_probe_video", lambda _url: {"title": "YouTube 示例", "duration": 30.0})
+    monkeypatch.setattr(runner, "_download_audio", lambda *_args, **_kwargs: tmp_path / "sample.mp3")
+    monkeypatch.setattr(
+        runner,
+        "_transcribe",
+        lambda *_args, **_kwargs: ("[00:00] 示例", [{"start": 0.0, "end": 3.0, "text": "示例"}]),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_export_transcript_snapshot",
+        lambda *_args, **_kwargs: type(
+            "SnapshotResult",
+            (),
+            {
+                "artifacts": {
+                    "transcript_path": str(tmp_path / "transcript.txt"),
+                    "summary_path": str(tmp_path / "summary.json"),
+                },
+                "model_dump": lambda self, mode="json": self.artifacts,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_summarize",
+        lambda *_args, **_kwargs: {
+            "overview": "概览",
+            "knowledgeNoteMarkdown": "# Note",
+            "bulletPoints": [],
+            "chapters": [],
+            "chapterGroups": [],
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_export_result",
+        lambda *_args, **_kwargs: runner._build_task_result("transcript", {"overview": "概览", "knowledgeNoteMarkdown": "# Note"}),
+    )
+
+    result_events, result = runner.run(
+        PipelineContext(
+            task_id="task-youtube",
+            task_input={
+                "input_type": InputType.URL,
+                "source": "https://youtu.be/dQw4w9WgXcQ",
+                "title": None,
+            },
+        ),
+        on_event=lambda event: emitted.append((event.stage, event.progress, event.message, event.payload)),
+    )
+
+    assert result.overview == "概览"
+    assert emitted[0][0] == "preparing" or result_events[0].stage == "preparing"
+
+
+def test_run_from_url_rejects_unsupported_url(tmp_path: Path) -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path))
+
+    with pytest.raises(UnsupportedInputError, match="supports Bilibili and YouTube"):
+        runner.run(
+            PipelineContext(
+                task_id="task-unsupported",
+                task_input={
+                    "input_type": InputType.URL,
+                    "source": "https://example.com/video/123",
+                    "title": None,
+                },
+            )
+        )
 
 
 def test_export_transcript_snapshot_creates_resummary_artifacts(tmp_path: Path) -> None:

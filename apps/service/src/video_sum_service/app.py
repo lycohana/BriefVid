@@ -875,7 +875,35 @@ def probe_video_asset(
     url: str,
     force_refresh: bool = False,
 ) -> tuple[VideoAssetRecord, list[VideoPageOptionResponse], bool]:
-    normalized_url, canonical_id = normalize_video_url(url)
+    normalized = normalize_video_url(url)
+    normalized_url = normalized.normalized_url
+    canonical_id = normalized.canonical_id
+    platform = normalized.platform
+
+    if platform not in {"bilibili", "youtube"}:
+        raise HTTPException(status_code=400, detail="当前仅支持 Bilibili 或 YouTube 单条视频链接。")
+
+    if platform == "youtube":
+        info = _extract_video_info(normalized_url)
+        title = str(info.get("title") or canonical_id or normalized_url)
+        thumbnail = str(info.get("thumbnail") or "")
+        duration = float(info.get("duration")) if info.get("duration") else None
+        actual_id = str(info.get("id") or canonical_id or normalized_url)
+        cached_cover_url = cache_cover_image(thumbnail, actual_id, referer_url=normalized_url)
+        return (
+            _build_base_video_asset(
+                canonical_id=actual_id,
+                platform="youtube",
+                title=title,
+                source_url=normalized_url,
+                cover_url=cached_cover_url,
+                duration=duration,
+                pages=[],
+            ),
+            [],
+            False,
+        )
+
     requested_page = extract_bilibili_page(normalized_url)
 
     if requested_page is None:
@@ -1549,6 +1577,9 @@ def create_task(request: TaskCreateRequest) -> TaskDetailResponse:
         asset = task_store.upsert_video_asset(probed)
         video_id = asset.video_id
 
+    normalized = normalize_video_url(request.source) if request.input_type is InputType.URL else None
+    page_number = normalized.page_number if normalized and normalized.platform == "bilibili" else None
+
     record = task_store.create_task(
         TaskInput(
             input_type=request.input_type,
@@ -1558,7 +1589,7 @@ def create_task(request: TaskCreateRequest) -> TaskDetailResponse:
             options=request.options,
         ),
         video_id=video_id,
-        page_number=extract_bilibili_page(request.source) if request.input_type is InputType.URL else None,
+        page_number=page_number,
         page_title=request.title,
     )
     task_worker.submit(record)

@@ -16,6 +16,14 @@ members = [
   "packages/infra",
 ]
 
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+video-sum-core = { workspace = true }
+video-sum-infra = { workspace = true }
+video-sum-service = { workspace = true }
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

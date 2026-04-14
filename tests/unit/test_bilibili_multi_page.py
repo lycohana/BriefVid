@@ -19,24 +19,50 @@ class _FakeYoutubeDL:
 
 
 def test_normalize_video_url_preserves_requested_page() -> None:
-    normalized, canonical = normalize_video_url("https://www.bilibili.com/video/BV1xx411c7mD?p=3")
+    result = normalize_video_url("https://www.bilibili.com/video/BV1xx411c7mD?p=3")
 
-    assert normalized == "https://www.bilibili.com/video/BV1xx411c7mD?p=3"
-    assert canonical == "BV1xx411c7mD"
+    assert result.normalized_url == "https://www.bilibili.com/video/BV1xx411c7mD?p=3"
+    assert result.canonical_id == "BV1xx411c7mD"
+    assert result.platform == "bilibili"
+    assert result.page_number == 3
 
 
 def test_normalize_video_url_accepts_raw_bvid() -> None:
-    normalized, canonical = normalize_video_url("BV1xx411c7mD")
+    result = normalize_video_url("BV1xx411c7mD")
 
-    assert normalized == "https://www.bilibili.com/video/BV1xx411c7mD"
-    assert canonical == "BV1xx411c7mD"
+    assert result.normalized_url == "https://www.bilibili.com/video/BV1xx411c7mD"
+    assert result.canonical_id == "BV1xx411c7mD"
+    assert result.platform == "bilibili"
 
 
 def test_normalize_video_url_accepts_raw_bvid_with_page() -> None:
-    normalized, canonical = normalize_video_url("BV1xx411c7mD?p=2")
+    result = normalize_video_url("BV1xx411c7mD?p=2")
 
-    assert normalized == "https://www.bilibili.com/video/BV1xx411c7mD?p=2"
-    assert canonical == "BV1xx411c7mD"
+    assert result.normalized_url == "https://www.bilibili.com/video/BV1xx411c7mD?p=2"
+    assert result.canonical_id == "BV1xx411c7mD"
+    assert result.platform == "bilibili"
+    assert result.page_number == 2
+
+
+def test_normalize_video_url_accepts_youtube_watch_url() -> None:
+    result = normalize_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123")
+
+    assert result.normalized_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert result.canonical_id == "dQw4w9WgXcQ"
+    assert result.platform == "youtube"
+    assert result.page_number is None
+
+
+def test_normalize_video_url_accepts_youtu_be_and_shorts() -> None:
+    short_link = normalize_video_url("https://youtu.be/dQw4w9WgXcQ?t=43")
+    shorts_link = normalize_video_url("https://www.youtube.com/shorts/dQw4w9WgXcQ")
+
+    assert short_link.normalized_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert short_link.canonical_id == "dQw4w9WgXcQ"
+    assert short_link.platform == "youtube"
+    assert shorts_link.normalized_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert shorts_link.canonical_id == "dQw4w9WgXcQ"
+    assert shorts_link.platform == "youtube"
 
 
 def test_probe_video_asset_requires_page_selection_for_multi_page(monkeypatch) -> None:
@@ -87,3 +113,25 @@ def test_probe_video_asset_returns_selected_page_when_page_is_explicit(monkeypat
     assert asset.title == "测试合集"
     assert asset.pages[1].title == "P2 正片"
     assert len(pages) == 2
+
+
+def test_probe_video_asset_returns_youtube_single_video(monkeypatch) -> None:
+    payload = {
+        "id": "dQw4w9WgXcQ",
+        "title": "示例 YouTube 视频",
+        "thumbnail": "https://example.com/youtube-cover.jpg",
+        "duration": 123,
+        "extractor_key": "Youtube",
+    }
+
+    monkeypatch.setattr(service_app, "YoutubeDL", lambda options: _FakeYoutubeDL(payload))
+    monkeypatch.setattr(service_app, "cache_cover_image", lambda source_url, canonical_id, referer_url=None: source_url)
+
+    asset, pages, requires_selection = service_app.probe_video_asset("https://youtu.be/dQw4w9WgXcQ")
+
+    assert requires_selection is False
+    assert asset.canonical_id == "dQw4w9WgXcQ"
+    assert asset.platform == "youtube"
+    assert asset.source_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert asset.title == "示例 YouTube 视频"
+    assert pages == []

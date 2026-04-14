@@ -389,6 +389,14 @@ function resolveDevPython(): { command: string; args: string[]; cwd: string; for
   return { command: "python", args: ["-m", "video_sum_service"], cwd: repoRoot, forceHidden: true };
 }
 
+function getDevPythonPathEntries() {
+  return [
+    path.resolve(repoRoot, "packages/core/src"),
+    path.resolve(repoRoot, "packages/infra/src"),
+    path.resolve(repoRoot, "apps/service/src"),
+  ];
+}
+
 function resolvePackagedBackend(): { command: string; args: string[]; cwd: string } {
   const candidateRoots = [
     path.join(process.resourcesPath, "backend", "BriefVid"),
@@ -454,6 +462,14 @@ async function startBackend(): Promise<BackendStatus> {
       ...process.env,
       VIDEO_SUM_HOST: "127.0.0.1",
       VIDEO_SUM_PORT: "3838",
+      ...(isDev
+        ? {
+            PYTHONPATH: [
+              ...getDevPythonPathEntries(),
+              process.env.PYTHONPATH || "",
+            ].filter(Boolean).join(path.delimiter),
+          }
+        : {}),
     },
     stdio: ["ignore", "ignore", "ignore"],  // 完全忽略子进程的 stdio，避免窗口弹出和管道阻塞
     detached: false,

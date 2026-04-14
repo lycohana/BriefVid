@@ -228,14 +228,16 @@ class RealPipelineRunner(PipelineRunner):
     ) -> TaskResult:
         task_input = context.task_input
         emit("preparing", 8, "正在规范化视频链接")
-        normalized_url, bvid = normalize_video_url(task_input.source)
-        if "bilibili.com/video/" not in normalized_url:
-            raise UnsupportedInputError("Current runner only supports Bilibili video URLs.")
+        normalized = normalize_video_url(task_input.source)
+        normalized_url = normalized.normalized_url
+        canonical_id = normalized.canonical_id
+        if normalized.platform not in {"bilibili", "youtube"}:
+            raise UnsupportedInputError("Current runner only supports Bilibili and YouTube video URLs.")
 
         task_dir = ensure_directory(self._settings.tasks_dir / context.task_id)
         emit("probing", 12, "正在读取视频信息", {"url": normalized_url})
         metadata = self._probe_video(normalized_url)
-        title = task_input.title or metadata.get("title") or bvid or "video"
+        title = task_input.title or metadata.get("title") or canonical_id or "video"
         safe_title = sanitize_filename(title)
         emit(
             "probing",

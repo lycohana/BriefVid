@@ -46,7 +46,7 @@ export function HomePage({
                   type="text"
                   value={probeUrl}
                   onChange={(event) => setProbeUrl(event.target.value)}
-                  placeholder="粘贴视频链接或直接输入 BV 号，例如 BV1xx411c7mD"
+                  placeholder="粘贴 Bilibili / YouTube 视频链接，或直接输入 BV 号"
                   required
                 />
               </div>

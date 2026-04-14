@@ -213,3 +213,50 @@ def test_repository_persists_task_page_metadata() -> None:
     assert fetched.page_number == 3
     assert fetched.page_title == "P3 重摘要"
     assert fetched.to_summary().page_number == 3
+
+
+def test_task_summary_does_not_infer_page_number_for_youtube_url() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    record = repository.create_task(
+        TaskInput(
+            input_type=InputType.URL,
+            source="https://www.youtube.com/watch?v=dQw4w9WgXcQ&p=2",
+            title="YouTube 示例",
+        ),
+        video_id="video-youtube",
+    )
+
+    fetched = repository.get_task(record.task_id)
+
+    assert fetched is not None
+    assert fetched.page_number is None
+    assert fetched.to_summary().page_number is None
+
+
+def test_repository_upserts_youtube_video_asset() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    asset = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="dQw4w9WgXcQ",
+            platform="youtube",
+            title="YouTube 视频",
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            cover_url="https://example.com/youtube.jpg",
+            duration=212.0,
+        )
+    )
+
+    fetched = repository.get_video_asset(asset.video_id)
+
+    assert fetched is not None
+    assert fetched.platform == "youtube"
+    assert fetched.pages == []
+    assert fetched.canonical_id == "dQw4w9WgXcQ"
