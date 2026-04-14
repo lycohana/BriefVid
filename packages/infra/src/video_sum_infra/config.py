@@ -6,6 +6,7 @@ from video_sum_infra.runtime import (
     default_cache_dir,
     default_data_dir,
     default_database_url,
+    default_host,
     default_tasks_dir,
 )
 
@@ -220,7 +221,7 @@ def normalize_transcription_provider(value: str | None, default: str = "siliconf
 
 
 class ServiceSettings(BaseSettings):
-    host: str = "127.0.0.1"
+    host: str = Field(default_factory=default_host)
     port: int = 3838
     data_dir: Path = Field(default_factory=default_data_dir)
     cache_dir: Path = Field(default_factory=default_cache_dir)

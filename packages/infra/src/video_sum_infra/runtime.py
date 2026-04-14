@@ -10,6 +10,16 @@ from pathlib import Path
 
 
 APP_SLUG = "briefvid"
+DOCKER_DATA_ROOT = Path("/data")
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def is_running_in_docker() -> bool:
+    return _env_flag("VIDEO_SUM_DOCKER") or Path("/.dockerenv").exists()
 
 
 def is_frozen() -> bool:
@@ -30,6 +40,9 @@ def bundled_root() -> Path:
 
 
 def web_static_dir() -> Path:
+    override = os.environ.get("VIDEO_SUM_WEB_STATIC_DIR", "").strip()
+    if override:
+        return Path(override).resolve()
     if is_frozen():
         return bundled_root() / "web" / "static"
     return repo_root() / "apps" / "web" / "static"
@@ -49,10 +62,17 @@ def local_appdata_dir() -> Path:
 
 
 def app_data_root() -> Path:
+    override = os.environ.get("VIDEO_SUM_APP_DATA_ROOT", "").strip()
+    if override:
+        return Path(override).resolve()
+    if is_running_in_docker():
+        return DOCKER_DATA_ROOT
     return local_appdata_dir() / APP_SLUG
 
 
 def default_data_dir() -> Path:
+    if is_running_in_docker():
+        return app_data_root()
     return app_data_root() / "data"
 
 
@@ -66,6 +86,12 @@ def default_tasks_dir() -> Path:
 
 def default_database_url() -> str:
     return f"sqlite:///{(default_data_dir() / 'video_sum.db').as_posix()}"
+
+
+def default_host() -> str:
+    if is_running_in_docker():
+        return "0.0.0.0"
+    return "127.0.0.1"
 
 
 def managed_runtime_root() -> Path:
