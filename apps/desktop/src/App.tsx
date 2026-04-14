@@ -5,6 +5,7 @@ import {
   deriveRuntimeDeviceLabel,
   emptySnapshot,
   getConfigHealth,
+  getUpdateDialogSignal,
   isUpdateUnsupported,
   shouldShowSetupAssistant,
   toUpdateState,
@@ -150,6 +151,18 @@ export function App() {
   function closeUpdateDialog() {
     setUpdateDialogOpen(false);
   }
+
+  const updateDialogSignal = useMemo(
+    () => getUpdateDialogSignal(updateState),
+    [updateState],
+  );
+
+  useEffect(() => {
+    if (!updateDialogSignal) {
+      return;
+    }
+    setUpdateDialogOpen(true);
+  }, [updateDialogSignal]);
 
   async function handleCheckForUpdates() {
     if (!window.desktop?.update) {
@@ -358,6 +371,7 @@ export function App() {
         updateState={updateState}
         configHealth={configHealth}
         onOpenSettings={openConfigAssist}
+        onOpenUpdateDialog={openUpdateDialog}
       />
       <aside className="sidebar">
         <nav className="nav">

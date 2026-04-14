@@ -12,6 +12,7 @@ export function TitleBar({
   updateState,
   configHealth,
   onOpenSettings,
+  onOpenUpdateDialog,
 }: {
   darkMode: boolean;
   onToggleTheme(): void;
@@ -22,6 +23,7 @@ export function TitleBar({
   updateState: UpdateState;
   configHealth: ConfigHealth;
   onOpenSettings(issueKey?: string): void;
+  onOpenUpdateDialog(): void;
 }) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
@@ -94,6 +96,11 @@ export function TitleBar({
         ? "已就绪"
         : "建议补全";
 
+  function handleOpenUpdateDialog() {
+    setStatusPopoverOpen(false);
+    onOpenUpdateDialog();
+  }
+
   return (
     <div className="title-bar">
       <div className="title-bar-sidebar-brand">
@@ -147,18 +154,26 @@ export function TitleBar({
                 <span>配置</span>
                 <strong>{configStatusText}</strong>
               </div>
-              <div className={`sidebar-status-item ${hasNewVersion ? "is-update" : ""}`}>
+              <button
+                className={`sidebar-status-item sidebar-status-item-button ${hasNewVersion ? "is-update" : ""}`}
+                type="button"
+                onClick={handleOpenUpdateDialog}
+              >
                 <span>更新</span>
                 <strong>{updateStatusText}</strong>
-              </div>
+              </button>
               <div className="sidebar-status-item">
                 <span>设备</span>
                 <strong>{runtimeDeviceLabel}</strong>
               </div>
-              <div className="sidebar-status-item">
+              <button
+                className="sidebar-status-item sidebar-status-item-button"
+                type="button"
+                onClick={handleOpenUpdateDialog}
+              >
                 <span>版本</span>
                 <strong>{version || "-"}</strong>
-              </div>
+              </button>
             </div>
             {hasConfigProblem ? (
               <div className="title-bar-status-actions">

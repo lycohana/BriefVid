@@ -692,6 +692,15 @@ textarea {
   transition: background-color var(--transition-fast);
 }
 
+.sidebar-status-item-button {
+  width: 100%;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
 .sidebar-status-item:hover {
   background: var(--bg-subtle);
 }
