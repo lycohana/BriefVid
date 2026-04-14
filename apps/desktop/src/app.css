@@ -2300,6 +2300,17 @@ textarea {
   color: var(--settings-text-soft);
 }
 
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-inline-actions .secondary-button {
+  min-width: 148px;
+}
+
 .settings-input-help {
   display: flex;
   flex-wrap: wrap;

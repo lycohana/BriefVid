@@ -208,3 +208,13 @@ export type SystemLogResponse = {
   lines: number;
   content: string;
 };
+
+export type LlmTestResponse = {
+  ok: boolean;
+  message: string;
+  model: string;
+  baseUrl: string;
+  responsePreview?: string;
+  jsonOutputAvailable?: boolean;
+  jsonPreview?: string;
+};

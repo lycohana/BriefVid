@@ -23,6 +23,13 @@ PipelineEventReporter = Callable[[PipelineEvent], None]
 class PipelineRunner:
     """Minimal orchestration contract for future pipeline implementations."""
 
+    def preflight(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None = None,
+    ) -> None:
+        return None
+
     def run(
         self,
         context: PipelineContext,

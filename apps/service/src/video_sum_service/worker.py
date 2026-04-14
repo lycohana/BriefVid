@@ -94,6 +94,11 @@ class TaskWorker:
                     payload=payload,
                 )
 
+            self._pipeline_runner.preflight(
+                context,
+                on_event=handle_pipeline_event,
+            )
+
             events, result = self._pipeline_runner.run(
                 context,
                 on_event=handle_pipeline_event,

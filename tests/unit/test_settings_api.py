@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi import HTTPException
+
 import video_sum_service.app as service_app
 from video_sum_infra.config import ServiceSettings
-from video_sum_service.app import app, install_local_asr, serialize_settings, settings_manager, update_settings
+from video_sum_service.app import (
+    app,
+    install_local_asr,
+    serialize_settings,
+    settings_manager,
+    test_asr_connection,
+    test_llm_connection,
+    update_settings,
+)
 from video_sum_service.settings_manager import SettingsUpdatePayload
 
 
@@ -155,3 +165,239 @@ def test_install_workspace_packages_bootstraps_hatchling_before_local_packages(
     assert str(tmp_path / "packages" / "infra") in commands[1]
     assert str(tmp_path / "packages" / "core") in commands[1]
     assert str(tmp_path / "apps" / "service") in commands[1]
+
+
+def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        llm_enabled=True,
+        llm_base_url="https://old.example/v1",
+        llm_api_key="old-key",
+        llm_model="old-model",
+    )
+    settings_manager._settings = current
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+
+    response = test_llm_connection(
+        SettingsUpdatePayload(
+            llm_base_url="https://api.example.com/v1",
+            llm_api_key="new-key",
+            llm_model="new-model",
+        )
+    )
+
+    assert response["ok"] is True
+    assert response["model"] == "new-model"
+    assert response["jsonOutputAvailable"] is True
+    assert response["jsonPreview"] == '{"ok": true, "message": "test"}'
+    assert calls[0]["url"] == "https://api.example.com/v1/chat/completions"
+    assert calls[0]["headers"]["Authorization"] == "Bearer new-key"
+    assert calls[0]["json"]["model"] == "new-model"
+
+
+def test_llm_connection_requires_base_url(tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        llm_enabled=True,
+        llm_base_url="",
+        llm_api_key="test-key",
+        llm_model="test-model",
+    )
+    settings_manager._settings = current
+
+    try:
+        test_llm_connection()
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "请先填写 API Base URL。"
+    else:
+        raise AssertionError("expected HTTPException")
+
+
+def test_llm_connection_rejects_invalid_json_response(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        llm_enabled=True,
+        llm_base_url="https://api.example.com/v1",
+        llm_api_key="test-key",
+        llm_model="test-model",
+    )
+    settings_manager._settings = current
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"not json"}}]}'
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "not json"}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+
+    try:
+        test_llm_connection()
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert "未返回合法 JSON" in str(exc.detail)
+    else:
+        raise AssertionError("expected HTTPException")
+
+
+def test_asr_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        siliconflow_asr_base_url="https://old.example/v1",
+        siliconflow_asr_api_key="old-key",
+        siliconflow_asr_model="old-model",
+    )
+    settings_manager._settings = current
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"text":"test transcript"}'
+
+        def json(self) -> dict[str, object]:
+            return {"text": "test transcript"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], data: dict[str, object], files: dict[str, object]) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "data": data, "files": files})
+            return FakeResponse()
+
+    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+
+    response = test_asr_connection(
+        SettingsUpdatePayload(
+            siliconflow_asr_base_url="https://api.example.com/v1",
+            siliconflow_asr_api_key="new-key",
+            siliconflow_asr_model="new-model",
+        )
+    )
+
+    assert response["ok"] is True
+    assert response["model"] == "new-model"
+    assert response["responsePreview"] == "test transcript"
+    assert calls[0]["url"] == "https://api.example.com/v1/audio/transcriptions"
+    assert calls[0]["headers"]["Authorization"] == "Bearer new-key"
+    assert calls[0]["data"]["model"] == "new-model"
+
+
+def test_asr_connection_requires_api_key(tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        siliconflow_asr_base_url="https://api.example.com/v1",
+        siliconflow_asr_api_key="",
+        siliconflow_asr_model="TeleAI/TeleSpeechASR",
+    )
+    settings_manager._settings = current
+
+    try:
+        test_asr_connection()
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "请先填写 SiliconFlow API Key。"
+    else:
+        raise AssertionError("expected HTTPException")
+
+
+def test_asr_connection_accepts_empty_transcript_when_endpoint_responds(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        siliconflow_asr_base_url="https://api.example.com/v1",
+        siliconflow_asr_api_key="test-key",
+        siliconflow_asr_model="TeleAI/TeleSpeechASR",
+    )
+    settings_manager._settings = current
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"text":""}'
+
+        def json(self) -> dict[str, object]:
+            return {"text": ""}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], data: dict[str, object], files: dict[str, object]) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+
+    response = test_asr_connection()
+
+    assert response["ok"] is True
+    assert "接口已响应，但测试音频未返回文本" in str(response["message"])
+    assert response["responsePreview"] == ""

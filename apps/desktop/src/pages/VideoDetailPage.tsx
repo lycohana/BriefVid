@@ -13,6 +13,7 @@ import {
   buildKnowledgeCards,
   describeMindMapWorkspace,
   describeTaskContentState,
+  describeUserFacingErrorMessage,
   pickDetailTaskId,
   resolveKnowledgeNoteMarkdown,
   type DetailTab,
@@ -766,7 +767,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
         tone: "failed",
         title: "所选版本加载失败",
         description: "可以重新点击该版本重试，或先切换查看其他已完成任务。",
-        detail: selectedTaskLoadError,
+        detail: describeUserFacingErrorMessage(selectedTaskLoadError),
       } as const;
     }
     return describeTaskContentState(selectedTaskDetail);
@@ -797,7 +798,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       return {
         tone: "failed",
         title: "当前版本暂时无法打开思维导图",
-        description: selectedTaskLoadError,
+        description: describeUserFacingErrorMessage(selectedTaskLoadError),
         actionLabel: "稍后重试",
         actionEnabled: false,
       } as const;
@@ -814,9 +815,9 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const selectedTranscript = selectedResult?.transcript_text ?? "";
   const liveStatus = latestTaskDetail?.status ?? latestTaskSummary?.status ?? video?.latest_status;
   const liveMessage = latestTaskLoadError
-    ?? liveProgress.failedEvent?.message
+    ?? describeUserFacingErrorMessage(liveProgress.failedEvent?.message)
     ?? liveProgress.currentEvent?.message
-    ?? latestTaskDetail?.error_message
+    ?? describeUserFacingErrorMessage(latestTaskDetail?.error_message)
     ?? (latestTaskSummary ? taskStatusLabel(latestTaskSummary.status) : "等待开始处理");
   const liveTaskCode = latestTaskId?.slice(0, 8) ?? null;
   const liveTaskTitle = latestTaskDetail?.title || latestTaskSummary?.title || video?.title || "当前任务";
@@ -1367,14 +1368,14 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                             {selectedTaskLoadError ? (
                               <div className="detail-error-banner" role="status">
                                 <strong>版本详情加载失败</strong>
-                                <span>{selectedTaskLoadError}</span>
+                                <span>{describeUserFacingErrorMessage(selectedTaskLoadError)}</span>
                               </div>
                             ) : null}
 
                             {selectedTaskDetail?.error_message ? (
                               <div className="detail-error-banner" role="status">
                                 <strong>任务错误</strong>
-                                <span>{selectedTaskDetail.error_message}</span>
+                                <span>{describeUserFacingErrorMessage(selectedTaskDetail.error_message)}</span>
                               </div>
                             ) : null}
 

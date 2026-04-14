@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+import io
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import textwrap
 import threading
 from urllib.parse import urlencode, urlparse
 import venv
+import wave
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -554,6 +556,204 @@ def cache_cover_image(source_url: str, canonical_id: str, referer_url: str | Non
         return f"/media/covers/{target.name}"
     except Exception:
         return normalized_source
+
+
+def _extract_http_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        for key in ("detail", "message", "error", "msg"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    text = (response.text or "").strip()
+    return text or f"HTTP {response.status_code}"
+
+
+def _extract_llm_message_content(body: dict[str, object] | None) -> str:
+    if not isinstance(body, dict):
+        return ""
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+        return "\n".join(text_parts).strip()
+    return ""
+
+
+def _build_test_wav_bytes(duration_ms: int = 250, sample_rate: int = 16000) -> bytes:
+    frame_count = max(1, int(sample_rate * duration_ms / 1000))
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
+    return buffer.getvalue()
+
+
+def test_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[str, object]:
+    current_settings = settings_manager.current
+    updates = payload.model_dump(exclude_none=True) if payload is not None else {}
+    effective_settings = ServiceSettings.model_validate(
+        {**current_settings.model_dump(mode="json"), **updates}
+    )
+
+    base_url = str(effective_settings.llm_base_url or "").strip().rstrip("/")
+    api_key = str(effective_settings.llm_api_key or "").strip()
+    model = str(effective_settings.llm_model or "").strip()
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="请先填写 API Base URL。")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="请先填写 API Key。")
+    if not model:
+        raise HTTPException(status_code=400, detail="请先填写模型名称。")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    request_payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是一个 JSON 测试助手。你只能返回合法 JSON，不能输出任何额外文字。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请只返回一个合法 JSON 对象，不要带 markdown 代码块，不要带解释。"
+                    '格式必须是：{"ok":true,"message":"test"}'
+                ),
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": 64,
+    }
+
+    try:
+        with httpx.Client(timeout=20, follow_redirects=True) as client:
+            response = client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=request_payload,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"LLM 连接失败：{exc}") from exc
+
+    if response.status_code >= 400:
+        detail = _extract_http_error_detail(response)
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"LLM 测试失败：{detail}",
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+
+    preview = _extract_llm_message_content(body)
+    if not preview:
+        raise HTTPException(status_code=502, detail="LLM 测试失败：接口已连通，但没有返回可读取的消息内容。")
+
+    try:
+        parsed_json = json.loads(preview)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM 测试失败：接口可访问，但当前模型未返回合法 JSON。{exc.msg}",
+        ) from exc
+
+    preview = preview[:200]
+    return {
+        "ok": True,
+        "message": f"LLM 连接与 JSON 输出测试成功：{model}",
+        "model": model,
+        "baseUrl": base_url,
+        "responsePreview": preview,
+        "jsonOutputAvailable": True,
+        "jsonPreview": json.dumps(parsed_json, ensure_ascii=False)[:200],
+    }
+
+
+def test_asr_connection(payload: SettingsUpdatePayload | None = None) -> dict[str, object]:
+    current_settings = settings_manager.current
+    updates = payload.model_dump(exclude_none=True) if payload is not None else {}
+    effective_settings = ServiceSettings.model_validate(
+        {**current_settings.model_dump(mode="json"), **updates}
+    )
+
+    base_url = str(effective_settings.siliconflow_asr_base_url or "").strip().rstrip("/")
+    api_key = str(effective_settings.siliconflow_asr_api_key or "").strip()
+    model = str(effective_settings.siliconflow_asr_model or "").strip()
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="请先填写 SiliconFlow Base URL。")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="请先填写 SiliconFlow API Key。")
+    if not model:
+        raise HTTPException(status_code=400, detail="请先填写 ASR 模型名称。")
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    request_url = f"{base_url}/audio/transcriptions"
+    audio_bytes = _build_test_wav_bytes()
+
+    try:
+        with httpx.Client(timeout=httpx.Timeout(connect=20.0, read=90.0, write=90.0, pool=20.0)) as client:
+            response = client.post(
+                request_url,
+                headers=headers,
+                data={"model": model},
+                files={"file": ("briefvid-asr-test.wav", audio_bytes, "audio/wav")},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"ASR 连接失败：{exc}") from exc
+
+    if response.status_code in {401, 403}:
+        detail = _extract_http_error_detail(response)
+        raise HTTPException(status_code=response.status_code, detail=f"ASR 测试失败：认证失败，{detail}")
+    if response.status_code >= 400:
+        detail = _extract_http_error_detail(response)
+        raise HTTPException(status_code=response.status_code, detail=f"ASR 测试失败：{detail}")
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+
+    transcript = str(body.get("text") or "").strip() if isinstance(body, dict) else ""
+    return {
+        "ok": True,
+        "message": (
+            f"ASR 连接测试成功：{model}"
+            if transcript
+            else f"ASR 连接测试成功：{model}（接口已响应，但测试音频未返回文本）"
+        ),
+        "model": model,
+        "baseUrl": base_url,
+        "responsePreview": transcript[:120],
+    }
 
 
 def _with_bilibili_page(url: str, page: int) -> str:
@@ -1109,6 +1309,16 @@ def update_settings(payload: SettingsUpdatePayload) -> dict[str, object]:
         "settings": serialize_settings(current_settings, environment_info=environment),
         "message": "设置已保存。涉及服务监听地址的修改将在下次启动后生效。",
     }
+
+
+@app.post("/api/v1/llm/test")
+def post_llm_test(payload: SettingsUpdatePayload | None = None) -> dict[str, object]:
+    return test_llm_connection(payload)
+
+
+@app.post("/api/v1/asr/test")
+def post_asr_test(payload: SettingsUpdatePayload | None = None) -> dict[str, object]:
+    return test_asr_connection(payload)
 
 
 @app.get("/api/v1/environment")

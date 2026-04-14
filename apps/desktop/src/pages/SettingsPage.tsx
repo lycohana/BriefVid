@@ -95,6 +95,10 @@ export function SettingsPage({
   const [logOutput, setLogOutput] = useState("");
   const [logPath, setLogPath] = useState(snapshot.systemInfo?.service?.log_file || desktop.logPath || "");
   const [serviceStatus, setServiceStatus] = useState("");
+  const [asrTestStatus, setAsrTestStatus] = useState("");
+  const [asrTestBusy, setAsrTestBusy] = useState(false);
+  const [llmTestStatus, setLlmTestStatus] = useState("");
+  const [llmTestBusy, setLlmTestBusy] = useState(false);
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("overview");
   const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
   const [activeFocusTarget, setActiveFocusTarget] = useState<string | null>(null);
@@ -263,6 +267,52 @@ export function SettingsPage({
     }
   }
 
+  async function testLlmConnection() {
+    if (!form || llmTestBusy) {
+      return;
+    }
+    try {
+      setLlmTestBusy(true);
+      setLlmTestStatus("正在测试 LLM 连接与 JSON 输出...");
+      const response = await api.testLlmConnection({
+        llm_enabled: form.llm_enabled,
+        llm_provider: form.llm_provider,
+        llm_base_url: form.llm_base_url,
+        llm_api_key: form.llm_api_key,
+        llm_model: form.llm_model,
+      });
+      const preview = response.jsonPreview || response.responsePreview;
+      const suffix = preview ? `，示例：${preview}` : "";
+      setLlmTestStatus(`${response.message}${suffix}`);
+    } catch (error) {
+      setLlmTestStatus(error instanceof Error ? error.message : "LLM 连接测试失败");
+    } finally {
+      setLlmTestBusy(false);
+    }
+  }
+
+  async function testAsrConnection() {
+    if (!form || asrTestBusy) {
+      return;
+    }
+    try {
+      setAsrTestBusy(true);
+      setAsrTestStatus("正在测试 ASR 连接...");
+      const response = await api.testAsrConnection({
+        transcription_provider: form.transcription_provider,
+        siliconflow_asr_base_url: form.siliconflow_asr_base_url,
+        siliconflow_asr_api_key: form.siliconflow_asr_api_key,
+        siliconflow_asr_model: form.siliconflow_asr_model,
+      });
+      const preview = response.responsePreview ? `，示例：${response.responsePreview}` : "";
+      setAsrTestStatus(`${response.message}${preview}`);
+    } catch (error) {
+      setAsrTestStatus(error instanceof Error ? error.message : "ASR 连接测试失败");
+    } finally {
+      setAsrTestBusy(false);
+    }
+  }
+
   const cudaPhaseItems = cudaPhasePlan.map((phase, index) => {
     const previousThreshold = index === 0 ? 0 : cudaPhasePlan[index - 1].threshold;
     const isComplete = cudaProgress >= phase.threshold;
@@ -383,6 +433,8 @@ export function SettingsPage({
           { id: "settings-save-status", message: saveStatus },
           { id: "settings-cuda-status", message: cudaStatus },
           { id: "settings-local-asr-status", message: localAsrStatus },
+          { id: "settings-asr-test-status", message: asrTestStatus },
+          { id: "settings-llm-test-status", message: llmTestStatus },
           { id: "settings-backend-error", message: desktop.backend?.lastError || "", tone: "error" },
           { id: "settings-service-status", message: serviceStatus },
         ]}
@@ -797,6 +849,19 @@ export function SettingsPage({
                       <input className="settings-input-field" value={form.siliconflow_asr_model} onChange={(e) => updateForm({ ...form, siliconflow_asr_model: e.target.value })} placeholder="TeleAI/TeleSpeechASR" />
                       <span className="settings-input-caption">首批支持 `TeleAI/TeleSpeechASR`。</span>
                     </label>
+                    <div className="settings-inline-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={asrTestBusy}
+                        onClick={() => void testAsrConnection()}
+                      >
+                        {asrTestBusy ? "测试中..." : "测试 ASR 是否可用"}
+                      </button>
+                      <span className="settings-input-caption">
+                        使用当前表单中的 SiliconFlow Base URL、API Key 和 ASR 模型名发起一次临时转写测试，不会保存设置。
+                      </span>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -891,6 +956,19 @@ export function SettingsPage({
                       <input className="settings-input-field" value={form.llm_model} onChange={(e) => updateForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
                       <span className="settings-input-caption">要使用的 LLM 模型名称</span>
                     </label>
+                    <div className="settings-inline-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={llmTestBusy}
+                        onClick={() => void testLlmConnection()}
+                      >
+                        {llmTestBusy ? "测试中..." : "测试是否可用"}
+                      </button>
+                      <span className="settings-input-caption">
+                        使用当前表单中的 Base URL、API Key 和模型名临时请求一次，并校验是否能返回合法 JSON，不会保存设置。
+                      </span>
+                    </div>
                   </>
                 )}
               </div>

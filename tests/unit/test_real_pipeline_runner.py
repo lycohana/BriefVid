@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ from video_sum_core.errors import (
     TranscriptionAuthenticationError,
     TranscriptionConfigurationError,
 )
+from video_sum_core.models.tasks import InputType
+from video_sum_core.pipeline.base import PipelineContext
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 
 
@@ -276,3 +279,45 @@ def test_transcribe_with_local_asr_requires_installed_runtime() -> None:
 
     with pytest.raises(TranscriptionConfigurationError, match="Install local ASR from Settings"):
         runner._transcribe(Path("sample.mp3"), 10.0, lambda *_args, **_kwargs: None)
+
+
+def test_preflight_checks_llm_before_full_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _build_runner()
+    events: list[tuple[str, int, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(runner, "_preflight_llm_availability", lambda: None)
+
+    runner.preflight(
+        PipelineContext(
+            task_id="task-1",
+            task_input={
+                "input_type": InputType.URL,
+                "source": "https://www.bilibili.com/video/BV1xx411c7mD",
+                "title": "测试视频",
+            },
+        ),
+        on_event=lambda event: events.append((event.stage, event.progress, event.message, event.payload)),
+    )
+
+    assert events[0][0] == "preflight"
+    assert "正在检查 LLM API 是否可用" in events[0][2]
+    assert events[-1][0] == "preflight"
+    assert "LLM API 检查通过" in events[-1][2]
+
+
+def test_export_transcript_snapshot_creates_resummary_artifacts(tmp_path: Path) -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path))
+
+    result = runner._export_transcript_snapshot(
+        tmp_path,
+        "示例标题",
+        "[00:00] 第一条",
+        [{"start": 0, "end": 1, "text": "第一条"}],
+    )
+
+    assert result.transcript_text == "[00:00] 第一条"
+    assert result.artifacts["transcript_path"].endswith("transcript.txt")
+    summary_payload = json.loads(Path(result.artifacts["summary_path"]).read_text(encoding="utf-8"))
+    assert summary_payload["title"] == "示例标题"
+    assert summary_payload["summary"] == {}
+    assert summary_payload["segments"][0]["text"] == "第一条"

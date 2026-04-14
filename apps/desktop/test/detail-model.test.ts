@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { buildChapterGroups, buildKnowledgeCards, describeMindMapWorkspace, describeTaskContentState, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
+import { buildChapterGroups, buildKnowledgeCards, describeMindMapWorkspace, describeTaskContentState, describeUserFacingErrorMessage, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
 import type { TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary } from "../src/types.ts";
 
 function run(name: string, fn: () => void) {
@@ -206,6 +206,25 @@ run("describes a failed workspace state when the selected task failed", () => {
 
   assert.equal(state?.tone, "failed");
   assert.equal(state?.detail, "LLM 请求失败");
+});
+
+run("translates common llm 404 errors into friendly chinese", () => {
+  const message = describeUserFacingErrorMessage("LLM request failed with status 404: Not Found");
+
+  assert.match(message, /接口地址无法访问/);
+  assert.match(message, /Base URL/);
+});
+
+run("uses translated error detail in failed workspace state", () => {
+  const state = describeTaskContentState(
+    createTaskDetail({
+      status: "failed",
+      result: null,
+      error_message: "LLM request failed with status 404: Not Found",
+    }),
+  );
+
+  assert.match(state?.detail || "", /接口地址无法访问/);
 });
 
 run("returns an accent state for a completed task that can generate mind map", () => {

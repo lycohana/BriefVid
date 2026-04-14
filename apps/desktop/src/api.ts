@@ -5,6 +5,7 @@ import type {
   SystemInfo,
   TaskDetail,
   TaskEvent,
+  LlmTestResponse,
   TaskMindMapResponse,
   TaskSummary,
   VideoAssetDetail,
@@ -22,12 +23,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
     const text = await response.text();
+    let detail = text || `Request failed: ${response.status}`;
     try {
       const payload = JSON.parse(text) as { detail?: string; message?: string };
-      throw new Error(payload.detail || payload.message || text || `Request failed: ${response.status}`);
+      detail = payload.detail || payload.message || detail;
     } catch {
-      throw new Error(text || `Request failed: ${response.status}`);
+      detail = text || `Request failed: ${response.status}`;
     }
+    throw new Error(detail);
   }
   return response.json() as Promise<T>;
 }
@@ -62,6 +65,20 @@ export const api = {
   updateSettings(payload: Partial<ServiceSettings>) {
     return fetchJson<UpdateSettingsResponse>("/api/v1/settings", {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  testLlmConnection(payload: Partial<ServiceSettings>) {
+    return fetchJson<LlmTestResponse>("/api/v1/llm/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  testAsrConnection(payload: Partial<ServiceSettings>) {
+    return fetchJson<LlmTestResponse>("/api/v1/asr/test", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });

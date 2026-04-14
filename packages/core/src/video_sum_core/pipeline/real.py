@@ -159,6 +159,28 @@ class RealPipelineRunner(PipelineRunner):
     def __init__(self, settings: PipelineSettings) -> None:
         self._settings = settings
 
+    def preflight(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None = None,
+    ) -> None:
+        task_input = context.task_input
+
+        def emit(stage: str, progress: int, message: str, payload: dict[str, object] | None = None) -> None:
+            if on_event is None:
+                return
+            on_event(PipelineEvent(stage=stage, progress=progress, message=message, payload=payload or {}))
+
+        if not (self._settings.llm_enabled and str(self._settings.llm_api_key or "").strip()):
+            return
+
+        if task_input.input_type not in {InputType.URL, InputType.TRANSCRIPT_TEXT}:
+            return
+
+        emit("preflight", 2, "正在检查 LLM API 是否可用")
+        self._preflight_llm_availability()
+        emit("preflight", 4, "LLM API 检查通过")
+
     def run(
         self,
         context: PipelineContext,
@@ -223,6 +245,16 @@ class RealPipelineRunner(PipelineRunner):
         )
         audio_path = self._download_audio(normalized_url, task_dir, safe_title, emit)
         transcript, segments = self._transcribe(audio_path, metadata.get("duration"), emit)
+        transcript_result = self._export_transcript_snapshot(task_dir, title, transcript, segments)
+        emit(
+            "transcribing",
+            86,
+            "转写完成，已保存可复用文本",
+            {
+                "result": transcript_result.model_dump(mode="json"),
+                "result_scope": "transcript",
+            },
+        )
         summary = self._summarize(transcript, segments, title, emit)
         emit("exporting", 97, "正在导出任务结果")
         result = self._export_result(task_dir, title, transcript, segments, summary)
@@ -1247,6 +1279,28 @@ class RealPipelineRunner(PipelineRunner):
         parsed["llm_completion_tokens"] = _safe_int(usage.get("completion_tokens"))
         parsed["llm_total_tokens"] = _safe_int(usage.get("total_tokens"))
         return parsed
+
+    def _preflight_llm_availability(self) -> None:
+        base_url = (self._settings.llm_base_url or "").rstrip("/")
+        if not base_url or not self._settings.llm_model:
+            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+
+        payload = {
+            "model": self._settings.llm_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是一个 JSON 测试助手。你只能返回合法 JSON，不能输出任何额外文字。",
+                },
+                {
+                    "role": "user",
+                    "content": '请只返回：{"ok":true}',
+                },
+            ],
+            "temperature": 0,
+            "max_tokens": 32,
+        }
+        self._request_llm_json(base_url=base_url, payload=payload)
 
     def _parse_llm_json_content(self, content: str) -> dict[str, object]:
         candidates = [str(content or "").strip()]
@@ -2700,11 +2754,11 @@ class RealPipelineRunner(PipelineRunner):
         segments: list[dict[str, object]],
         summary: dict[str, object],
     ) -> TaskResult:
-        transcript_path = task_dir / "transcript.txt"
-        summary_path = task_dir / "summary.json"
+        snapshot_result = self._export_transcript_snapshot(task_dir, title, transcript, segments)
+        transcript_path = Path(snapshot_result.artifacts["transcript_path"])
+        summary_path = Path(snapshot_result.artifacts["summary_path"])
         knowledge_note_path = task_dir / "knowledge_note.md"
         knowledge_note_markdown = str(summary.get("knowledgeNoteMarkdown") or "").strip()
-        transcript_path.write_text(transcript, encoding="utf-8")
         summary_path.write_text(
             json.dumps({"title": title, "summary": summary, "segments": segments}, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -2723,6 +2777,29 @@ class RealPipelineRunner(PipelineRunner):
                 "transcript_path": str(transcript_path),
                 "summary_path": str(summary_path),
                 "knowledge_note_path": str(knowledge_note_path),
+            },
+        )
+
+    def _export_transcript_snapshot(
+        self,
+        task_dir: Path,
+        title: str,
+        transcript: str,
+        segments: list[dict[str, object]],
+    ) -> TaskResult:
+        transcript_path = task_dir / "transcript.txt"
+        summary_path = task_dir / "summary.json"
+        transcript_path.write_text(transcript, encoding="utf-8")
+        summary_path.write_text(
+            json.dumps({"title": title, "summary": {}, "segments": segments}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return self._build_task_result(
+            transcript,
+            {},
+            artifacts={
+                "transcript_path": str(transcript_path),
+                "summary_path": str(summary_path),
             },
         )
 

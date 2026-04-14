@@ -36,6 +36,51 @@ export type MindMapWorkspaceState = {
   actionEnabled?: boolean;
 };
 
+export function describeUserFacingErrorMessage(rawMessage?: string | null): string {
+  const message = String(rawMessage || "").trim();
+  if (!message) {
+    return "";
+  }
+
+  const normalized = message.toLowerCase();
+
+  if (/llm request failed with status 404|http 404|status 404: not found/.test(normalized)) {
+    return "大模型接口地址无法访问。通常是 Base URL 填写不对，或当前服务商不支持这个接口路径。请到设置页检查 LLM 的 Base URL。";
+  }
+  if (/status 401|authentication failed|unauthorized|invalid api key|incorrect api key/.test(normalized)) {
+    return "API Key 校验失败。请检查密钥是否正确、是否过期，或是否复制了多余空格。";
+  }
+  if (/status 403|forbidden|permission denied/.test(normalized)) {
+    return "当前账号没有访问这个模型或接口的权限。请检查服务商后台的权限、余额或模型开通状态。";
+  }
+  if (/status 429|rate limit|too many requests/.test(normalized)) {
+    return "请求过于频繁，或当前额度不足。请稍后重试，并检查服务商后台是否有限流或余额不足。";
+  }
+  if (/status 500|status 502|status 503|status 504|server error|bad gateway|service unavailable|gateway timeout/.test(normalized)) {
+    return "模型服务暂时不可用，通常是服务商接口异常或网络波动。建议稍后再试。";
+  }
+  if (/connect timeout|read timeout|timed out|timeout/.test(normalized)) {
+    return "请求超时了。可能是当前网络较慢，或模型响应时间过长，建议稍后重试。";
+  }
+  if (/connection failed|connect error|network error|failed to establish|name or service not known|getaddrinfo/.test(normalized)) {
+    return "连接模型服务失败。请检查网络是否正常，以及接口地址是否填写正确。";
+  }
+  if (/not a valid json|未返回合法 json/.test(normalized)) {
+    return "模型接口能连通，但没有按要求返回合法 JSON，所以无法继续生成摘要。建议更换模型，或先到设置页点击测试按钮检查。";
+  }
+  if (/siliconflow asr authentication failed|asr 测试失败：认证失败/.test(normalized)) {
+    return "语音识别 API Key 校验失败。请检查 SiliconFlow API Key 是否正确。";
+  }
+  if (/siliconflow asr request failed|asr request failed/.test(normalized)) {
+    return "语音识别服务调用失败。请检查 SiliconFlow 的 Base URL、模型名和网络连接。";
+  }
+  if (/llm/.test(normalized) && /api key/.test(normalized)) {
+    return "LLM 的 API Key 似乎有问题。请到设置页重新检查并测试。";
+  }
+
+  return message;
+}
+
 export function pickDetailTaskId(tasks: TaskSummary[], preferredTaskId?: string | null): string | null {
   if (preferredTaskId && tasks.some((item) => item.task_id === preferredTaskId)) {
     return preferredTaskId;
@@ -327,7 +372,7 @@ export function describeTaskContentState(task?: Pick<TaskDetail, "status" | "res
       tone: "failed",
       title: "当前任务未生成可用结果",
       description: "可以切换到其他已完成任务，或重新发起摘要生成。",
-      detail: task.error_message || undefined,
+      detail: describeUserFacingErrorMessage(task.error_message) || undefined,
     };
   }
   return {
@@ -366,7 +411,9 @@ export function describeMindMapWorkspace(
     return {
       tone: "failed",
       title: "思维导图生成失败",
-      description: mindmap?.error_message || task.result?.mindmap_error_message || task.error_message || "这次处理没有成功生成可展示的导图。",
+      description: describeUserFacingErrorMessage(
+        mindmap?.error_message || task.result?.mindmap_error_message || task.error_message,
+      ) || "这次处理没有成功生成可展示的导图。",
       actionLabel: "重新生成导图",
       actionEnabled: true,
     };
@@ -384,7 +431,7 @@ export function describeMindMapWorkspace(
     return {
       tone: "failed",
       title: "当前任务暂时无法生成导图",
-      description: task.error_message || "这次处理没有产出可用于导图组织的结果。",
+      description: describeUserFacingErrorMessage(task.error_message) || "这次处理没有产出可用于导图组织的结果。",
       actionLabel: "等待可用结果",
       actionEnabled: false,
     };
