@@ -33,6 +33,25 @@ from video_sum_service.worker import TaskWorker
 
 _environment_probe_cache: dict[str, dict[str, object]] = {}
 _environment_probe_failures: dict[str, str] = {}
+_PIP_INDEX_CANDIDATES: tuple[tuple[str, str | None], ...] = (
+    ("official", None),
+    ("tsinghua", "https://pypi.tuna.tsinghua.edu.cn/simple"),
+    ("aliyun", "https://mirrors.aliyun.com/pypi/simple"),
+)
+
+
+def _split_env_urls(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return []
+    normalized = raw_value.replace("\r", "\n").replace(";", "\n").replace(",", "\n")
+    return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+def _torch_index_candidates(cuda_variant: str) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = [("official", f"https://download.pytorch.org/whl/{cuda_variant}")]
+    for index, url in enumerate(_split_env_urls(os.environ.get("VIDEO_SUM_TORCH_INDEX_URLS")), start=1):
+        candidates.append((f"custom-{index}", url))
+    return candidates
 
 
 def windows_hidden_subprocess_kwargs() -> dict[str, object]:
@@ -121,6 +140,97 @@ def command_error_detail(exc: subprocess.CalledProcessError, fallback: str) -> s
         merged = str(exc)
     merged = merged[-1500:]
     return f"{fallback}\n\n{merged}".strip()
+
+
+def pip_install_error_detail(
+    package_label: str,
+    attempts: list[tuple[str, subprocess.CalledProcessError]],
+) -> str:
+    if not attempts:
+        return f"安装 {package_label} 失败。"
+
+    last_label, last_exc = attempts[-1]
+    combined = "\n".join(
+        (str(exc.stdout or "").strip() + "\n" + str(exc.stderr or "").strip()).strip()
+        for _, exc in attempts
+    )
+    normalized = combined.lower()
+    hints = [
+        f"安装 {package_label} 失败。已尝试官方 PyPI 与国内镜像（清华、阿里云）。",
+    ]
+    if "ssl" in normalized or "unexpected_eof_while_reading" in normalized:
+        hints.append("检测到 SSL 握手异常，通常是当前网络到包索引的连接不稳定或被代理拦截。")
+    if "no matching distribution found" in normalized and "from versions: none" in normalized:
+        hints.append("当前输出更像是索引访问失败，而不是包本身不存在。")
+
+    last_detail = command_error_detail(last_exc, f"最后一次尝试使用 {last_label} 源仍然失败。")
+    return "\n\n".join([*hints, last_detail])
+
+
+def pip_install_with_fallbacks(
+    python_executable: Path,
+    runtime_channel: str,
+    packages: list[str],
+    *,
+    reinstall: bool = False,
+    timeout: int = 1800,
+    runner=run_command,
+) -> subprocess.CompletedProcess[str]:
+    attempts: list[tuple[str, subprocess.CalledProcessError]] = []
+
+    for label, index_url in _PIP_INDEX_CANDIDATES:
+        command = [
+            str(python_executable),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--upgrade",
+        ]
+        if reinstall:
+            command.append("--force-reinstall")
+        if index_url:
+            command.extend(["--index-url", index_url])
+        command.extend(packages)
+
+        try:
+            return runner(command, runtime_channel=runtime_channel, timeout=timeout)
+        except subprocess.CalledProcessError as exc:
+            attempts.append((label, exc))
+
+    raise HTTPException(status_code=500, detail=pip_install_error_detail("本地 ASR 依赖", attempts))
+
+
+def torch_install_with_fallbacks(
+    python_executable: Path,
+    runtime_channel: str,
+    cuda_variant: str,
+    *,
+    timeout: int = 1800,
+    runner=run_command,
+) -> subprocess.CompletedProcess[str]:
+    attempts: list[tuple[str, subprocess.CalledProcessError]] = []
+
+    for label, index_url in _torch_index_candidates(cuda_variant):
+        command = [
+            str(python_executable),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--upgrade",
+            "torch",
+            "torchvision",
+            "torchaudio",
+            "--index-url",
+            index_url,
+        ]
+        try:
+            return runner(command, runtime_channel=runtime_channel, timeout=timeout)
+        except subprocess.CalledProcessError as exc:
+            attempts.append((label, exc))
+
+    raise HTTPException(status_code=500, detail=pip_install_error_detail("CUDA 运行时依赖", attempts))
 
 
 def ensure_runtime_pip(python_executable: Path, runtime_channel: str) -> None:
@@ -444,24 +554,19 @@ def install_cuda_support(cuda_variant: str, repository: SqliteTaskRepository) ->
     try:
         install_workspace_packages(python_executable, runtime_channel=runtime_channel)
         ensure_runtime_pip(python_executable, runtime_channel)
-        result = run_command(
-            [
-                str(python_executable),
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                "torch",
-                "torchvision",
-                "torchaudio",
-                "--index-url",
-                f"https://download.pytorch.org/whl/{cuda_variant}",
-            ],
-            runtime_channel=runtime_channel,
+        result = torch_install_with_fallbacks(
+            python_executable,
+            runtime_channel,
+            cuda_variant,
+            timeout=1800,
+            runner=run_command,
         )
     except subprocess.CalledProcessError as exc:
         clear_environment_probe_cache(runtime_channel)
         raise HTTPException(status_code=500, detail=command_error_detail(exc, "安装 CUDA 依赖失败。")) from exc
+    except HTTPException:
+        clear_environment_probe_cache(runtime_channel)
+        raise
 
     current_settings = settings_manager.save(SettingsUpdatePayload(cuda_variant=cuda_variant, runtime_channel=runtime_channel))
     clear_environment_probe_cache(runtime_channel)
@@ -490,13 +595,20 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository) -> tupl
     try:
         install_workspace_packages(python_executable, runtime_channel=runtime_channel)
         ensure_runtime_pip(python_executable, runtime_channel)
-        command = [str(python_executable), "-m", "pip", "install", "--upgrade", "faster-whisper>=1.1.1"]
-        if reinstall:
-            command.insert(5, "--force-reinstall")
-        result = run_command(command, runtime_channel=runtime_channel, timeout=1800)
+        result = pip_install_with_fallbacks(
+            python_executable,
+            runtime_channel,
+            ["faster-whisper>=1.1.1"],
+            reinstall=reinstall,
+            timeout=1800,
+            runner=run_command,
+        )
     except subprocess.CalledProcessError as exc:
         clear_environment_probe_cache(runtime_channel)
         raise HTTPException(status_code=500, detail=((exc.stderr or exc.stdout or str(exc))[-1500:])) from exc
+    except HTTPException:
+        clear_environment_probe_cache(runtime_channel)
+        raise
 
     clear_environment_probe_cache(runtime_channel)
     environment = detect_environment(runtime_channel)

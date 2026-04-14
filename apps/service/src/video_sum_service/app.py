@@ -30,6 +30,7 @@ from video_sum_service.runtime_support import (
     ensure_runtime_channel,
     ensure_runtime_pip,
     install_workspace_packages,
+    pip_install_with_fallbacks,
     run_command,
     serialize_settings,
 )
@@ -191,10 +192,14 @@ def install_local_asr(reinstall: bool = False) -> dict[str, object]:
     try:
         _install_workspace_packages(python_executable, runtime_channel=runtime_channel)
         _ensure_runtime_pip(python_executable, runtime_channel)
-        command = [str(python_executable), "-m", "pip", "install", "--upgrade", "faster-whisper>=1.1.1"]
-        if reinstall:
-            command.insert(5, "--force-reinstall")
-        result = _run_command(command, runtime_channel=runtime_channel, timeout=1800)
+        result = pip_install_with_fallbacks(
+            python_executable,
+            runtime_channel,
+            ["faster-whisper>=1.1.1"],
+            reinstall=reinstall,
+            timeout=1800,
+            runner=_run_command,
+        )
     except Exception as exc:
         clear_environment_probe_cache(runtime_channel)
         if isinstance(exc, HTTPException):

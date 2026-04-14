@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from fastapi import HTTPException
 
 import video_sum_service.app as service_app
+import video_sum_service.runtime_support as runtime_support
 from video_sum_infra.config import ServiceSettings
 from video_sum_service.app import (
     app,
@@ -127,6 +129,64 @@ def test_install_local_asr_refreshes_environment(monkeypatch, tmp_path: Path) ->
     assert response["environment"]["localAsrVersion"] == "1.1.1"
 
 
+def test_install_local_asr_retries_with_mirror_when_official_index_fails(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr("video_sum_service.app.ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr("video_sum_service.app.runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr("video_sum_service.app._install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr("video_sum_service.app._ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+
+    commands: list[list[str]] = []
+
+    def fake_run(command, runtime_channel, timeout=1800):
+        commands.append(command)
+        if "--index-url" not in command:
+            raise subprocess.CalledProcessError(
+                1,
+                command,
+                stderr="SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING]'))",
+            )
+        return type("Result", (), {"stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr("video_sum_service.app._run_command", fake_run)
+    monkeypatch.setattr("video_sum_service.app.clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        "video_sum_service.app.detect_environment",
+        lambda runtime_channel=None: {
+            "runtimeChannel": runtime_channel or "base",
+            "localAsrInstalled": True,
+            "localAsrAvailable": True,
+            "localAsrVersion": "1.1.1",
+        },
+    )
+    monkeypatch.setattr(
+        "video_sum_service.app.build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+    monkeypatch.setattr("video_sum_service.app.write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    response = install_local_asr()
+
+    assert response["installed"] is True
+    assert len(commands) == 2
+    assert "--index-url" not in commands[0]
+    assert "--index-url" in commands[1]
+    index_flag = commands[1].index("--index-url")
+    assert commands[1][index_flag + 1] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
 def test_install_workspace_packages_bootstraps_hatchling_before_local_packages(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -165,6 +225,29 @@ def test_install_workspace_packages_bootstraps_hatchling_before_local_packages(
     assert str(tmp_path / "packages" / "infra") in commands[1]
     assert str(tmp_path / "packages" / "core") in commands[1]
     assert str(tmp_path / "apps" / "service") in commands[1]
+
+
+def test_torch_install_with_fallbacks_accepts_custom_cuda_index(monkeypatch, tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setenv("VIDEO_SUM_TORCH_INDEX_URLS", "https://mirror.example/pytorch/cu128")
+
+    def fake_run(command, runtime_channel, timeout=1800):
+        commands.append(command)
+        if command[-1] == "https://download.pytorch.org/whl/cu128":
+            raise subprocess.CalledProcessError(1, command, stderr="network error")
+        return type("Result", (), {"stdout": "ok", "stderr": ""})()
+
+    runtime_support.torch_install_with_fallbacks(
+        tmp_path / "python.exe",
+        "gpu-cu128",
+        "cu128",
+        runner=fake_run,
+    )
+
+    assert len(commands) == 2
+    assert commands[0][-1] == "https://download.pytorch.org/whl/cu128"
+    assert commands[1][-1] == "https://mirror.example/pytorch/cu128"
 
 
 def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:
