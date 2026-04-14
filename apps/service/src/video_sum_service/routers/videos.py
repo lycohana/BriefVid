@@ -23,6 +23,15 @@ from video_sum_service.worker import TaskWorker
 router = APIRouter(prefix="/api/v1/videos")
 
 
+@router.post("/{video_id}/favorite", response_model=VideoAssetDetailResponse)
+def set_video_favorite(video_id: str, payload: dict[str, bool], request: Request) -> VideoAssetDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.set_video_favorite(video_id, bool(payload.get("is_favorite")))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    return localize_video_cover(task_store, updated).to_detail()
+
+
 @router.post("/probe", response_model=VideoProbeResponse)
 def probe_video(request: VideoProbeRequest, app_request: Request) -> VideoProbeResponse:
     task_store: SqliteTaskRepository = app_request.app.state.task_repository

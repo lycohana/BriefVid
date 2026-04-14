@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import timezone
 
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
 from video_sum_service.repository import SqliteTaskRepository
@@ -42,6 +43,8 @@ def test_repository_upserts_video_asset() -> None:
     assert fetched is not None
     assert fetched.title == "示例视频"
     assert fetched.cover_url.endswith("cover.jpg")
+    assert fetched.is_favorite is False
+    assert fetched.favorite_updated_at is None
 
 
 def test_repository_updates_status() -> None:
@@ -260,3 +263,114 @@ def test_repository_upserts_youtube_video_asset() -> None:
     assert fetched.platform == "youtube"
     assert fetched.pages == []
     assert fetched.canonical_id == "dQw4w9WgXcQ"
+
+
+def test_repository_sets_video_favorite_without_touching_updated_at() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    asset = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV-favorite",
+            platform="bilibili",
+            title="收藏视频",
+            source_url="https://www.bilibili.com/video/BV-favorite",
+        )
+    )
+
+    before = repository.get_video_asset(asset.video_id)
+    assert before is not None
+
+    favorited = repository.set_video_favorite(asset.video_id, True)
+
+    assert favorited is not None
+    assert favorited.is_favorite is True
+    assert favorited.favorite_updated_at is not None
+    assert favorited.favorite_updated_at.tzinfo == timezone.utc
+    assert favorited.updated_at == before.updated_at
+
+    unfavorited = repository.set_video_favorite(asset.video_id, False)
+
+    assert unfavorited is not None
+    assert unfavorited.is_favorite is False
+    assert unfavorited.favorite_updated_at is None
+    assert unfavorited.updated_at == before.updated_at
+
+
+def test_repository_initialize_adds_favorite_columns_to_legacy_database() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE video_assets (
+            video_id TEXT PRIMARY KEY,
+            canonical_id TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            cover_url TEXT,
+            duration REAL,
+            page_catalog_json TEXT NOT NULL DEFAULT '[]',
+            latest_task_id TEXT,
+            latest_status TEXT,
+            latest_stage TEXT,
+            latest_error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            video_id TEXT,
+            status TEXT NOT NULL,
+            task_input_json TEXT NOT NULL,
+            page_number INTEGER,
+            page_title TEXT,
+            result_json TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE task_results (
+            task_id TEXT PRIMARY KEY,
+            result_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE task_events (
+            event_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            progress INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.commit()
+
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(video_assets)").fetchall()
+    }
+
+    assert "is_favorite" in columns
+    assert "favorite_updated_at" in columns

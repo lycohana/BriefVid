@@ -196,11 +196,13 @@ export function App() {
   }, [snapshot.videos]);
 
   const libraryCounts = useMemo(() => {
+    const favorite = snapshot.videos.filter((item) => item.is_favorite).length;
     const completed = snapshot.videos.filter((item) => item.latest_status === "completed").length;
     const running = snapshot.videos.filter((item) => item.latest_status === "running").length;
     const withResult = snapshot.videos.filter((item) => item.has_result).length;
     return {
       total: snapshot.videos.length,
+      favorite,
       completed,
       running,
       withResult,
@@ -216,6 +218,7 @@ export function App() {
         return video.title.toLowerCase().includes(keyword) || video.source_url.toLowerCase().includes(keyword);
       })
       .filter((video) => {
+        if (libraryFilter === "favorite") return video.is_favorite;
         if (libraryFilter === "completed") return video.latest_status === "completed";
         if (libraryFilter === "running") return video.latest_status === "running";
         if (libraryFilter === "with-result") return video.has_result;
@@ -223,11 +226,48 @@ export function App() {
       });
   }, [libraryFilter, query, snapshot.videos]);
 
+  const favoriteVideos = useMemo(() => {
+    return [...snapshot.videos]
+      .filter((video) => video.is_favorite)
+      .sort((left, right) => {
+        const leftTime = new Date(left.favorite_updated_at || left.updated_at).getTime();
+        const rightTime = new Date(right.favorite_updated_at || right.updated_at).getTime();
+        return rightTime - leftTime;
+      });
+  }, [snapshot.videos]);
+
   const recentVideos = useMemo(() => {
     return [...snapshot.videos]
       .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
       .slice(0, 6);
   }, [snapshot.videos]);
+
+  async function handleToggleFavorite(videoId: string, nextFavorite: boolean) {
+    const previousVideos = snapshot.videos;
+    const favoriteUpdatedAt = nextFavorite ? new Date().toISOString() : null;
+    setSnapshot((current) => ({
+      ...current,
+      videos: current.videos.map((video) => (
+        video.video_id === videoId
+          ? { ...video, is_favorite: nextFavorite, favorite_updated_at: favoriteUpdatedAt }
+          : video
+      )),
+    }));
+    try {
+      const updated = await api.setVideoFavorite(videoId, { is_favorite: nextFavorite });
+      setSnapshot((current) => ({
+        ...current,
+        videos: current.videos.map((video) => (
+          video.video_id === videoId
+            ? { ...video, ...updated }
+            : video
+        )),
+      }));
+    } catch (error) {
+      setSnapshot((current) => ({ ...current, videos: previousVideos }));
+      throw error;
+    }
+  }
 
   const runtimeDeviceLabel = useMemo(() => {
     return deriveRuntimeDeviceLabel({
@@ -477,7 +517,9 @@ export function App() {
                     onProbe={handleProbe}
                     onOpenSetupAssistant={openConfigAssist}
                     onOpenConfigIssue={navigateToConfigIssue}
+                    favoriteVideos={favoriteVideos}
                     recentVideos={recentVideos}
+                    onToggleFavorite={handleToggleFavorite}
                   />
                 )}
               />
@@ -495,6 +537,7 @@ export function App() {
                     setLibraryFilter={setLibraryFilter}
                     serviceOnline={snapshot.serviceOnline}
                     runtimeDeviceLabel={runtimeDeviceLabel}
+                    onToggleFavorite={handleToggleFavorite}
                   />
                 )}
               />

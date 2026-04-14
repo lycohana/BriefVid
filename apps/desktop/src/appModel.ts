@@ -31,7 +31,7 @@ export type UpdateState = {
   errorMessage: string | null;
 };
 
-export type LibraryFilter = "all" | "completed" | "running" | "with-result";
+export type LibraryFilter = "all" | "completed" | "running" | "with-result" | "favorite";
 export type MetricTone = "default" | "accent" | "success" | "info";
 export type DevicePreference = "auto" | "cpu" | "cuda";
 export type SelectOption = { value: string; label: string };

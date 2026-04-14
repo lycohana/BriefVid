@@ -194,6 +194,14 @@ async function loadTaskContext(taskId: string): Promise<TaskContext> {
   return { detail, events };
 }
 
+function IconFavorite(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="currentColor" viewBox="0 0 24 24" {...props}>
+      <path d="M12 18.26 4.95 22l1.35-7.84L.6 8.71l7.87-1.14L12 0.5l3.53 7.07 7.87 1.14-5.7 5.45L19.05 22z" />
+    </svg>
+  );
+}
+
 export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const { videoId = "" } = useParams();
   const navigate = useNavigate();
@@ -935,6 +943,28 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
   }
 
+  async function handleToggleFavorite() {
+    if (!video) {
+      return;
+    }
+    const previousVideo = video;
+    const nextFavorite = !video.is_favorite;
+    setVideo({
+      ...video,
+      is_favorite: nextFavorite,
+      favorite_updated_at: nextFavorite ? new Date().toISOString() : null,
+    });
+    try {
+      const updated = await api.setVideoFavorite(video.video_id, { is_favorite: nextFavorite });
+      setVideo(updated);
+      onRefresh();
+      setStatus(nextFavorite ? "已加入收藏" : "已取消收藏");
+    } catch (error) {
+      setVideo(previousVideo);
+      setStatus(error instanceof Error ? error.message : "更新收藏状态失败");
+    }
+  }
+
   if (!video) {
     return <section className="grid-card empty-state-card">正在加载视频详情...</section>;
   }
@@ -996,6 +1026,15 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                   ))}
                 </div>
                 <div className="detail-hero-actions">
+                  <button
+                    aria-label={video.is_favorite ? "取消收藏" : "收藏视频"}
+                    className={`detail-action-button secondary detail-action-button-compact detail-action-button-favorite ${video.is_favorite ? "is-active" : ""}`}
+                    title={video.is_favorite ? "取消收藏" : "收藏视频"}
+                    type="button"
+                    onClick={() => void handleToggleFavorite()}
+                  >
+                    <IconFavorite className="detail-action-icon" />
+                  </button>
                   <div className="detail-action-menu" ref={actionMenuRef}>
                     <button
                       aria-label="更多操作"

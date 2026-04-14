@@ -95,6 +95,13 @@ export const api = {
   getVideo(videoId: string) {
     return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}`);
   },
+  setVideoFavorite(videoId: string, payload: { is_favorite: boolean }) {
+    return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}/favorite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
   deleteVideo(videoId: string) {
     return fetchJson<{ deleted: boolean }>(`/api/v1/videos/${videoId}`, { method: "DELETE" });
   },

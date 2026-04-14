@@ -7,7 +7,7 @@ import type { VideoAssetSummary } from "../types";
 type LibraryPageProps = {
   snapshot: Snapshot;
   filteredVideos: VideoAssetSummary[];
-  libraryCounts: { total: number; completed: number; running: number; withResult: number };
+  libraryCounts: { total: number; completed: number; running: number; withResult: number; favorite: number };
   latestVideo: VideoAssetSummary | null;
   query: string;
   setQuery(value: string): void;
@@ -15,6 +15,7 @@ type LibraryPageProps = {
   setLibraryFilter(value: LibraryFilter): void;
   serviceOnline: boolean;
   runtimeDeviceLabel: string;
+  onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
 };
 
 export function LibraryPage({
@@ -28,9 +29,12 @@ export function LibraryPage({
   setLibraryFilter,
   serviceOnline,
   runtimeDeviceLabel,
+  onToggleFavorite,
 }: LibraryPageProps) {
+  const showWithResultMetric = libraryCounts.withResult !== libraryCounts.completed;
   const filters: Array<{ id: LibraryFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: libraryCounts.total },
+    { id: "favorite", label: "收藏", count: libraryCounts.favorite },
     { id: "completed", label: "已完成", count: libraryCounts.completed },
     { id: "running", label: "处理中", count: libraryCounts.running },
     { id: "with-result", label: "有结果", count: libraryCounts.withResult },
@@ -60,9 +64,10 @@ export function LibraryPage({
       <section className="library-summary-panel">
         <div className="library-summary-grid">
           <Metric label="视频总数" value={String(libraryCounts.total)} detail="本地已收录资产" tone="accent" />
+          <Metric label="已收藏" value={String(libraryCounts.favorite)} detail="重点沉淀内容" tone="info" />
           <Metric label="已完成" value={String(libraryCounts.completed)} detail="可查看完整摘要" tone="success" />
           <Metric label="处理中" value={String(libraryCounts.running)} detail="正在进行转写或总结" tone="info" />
-          <Metric label="有结果" value={String(libraryCounts.withResult)} detail="摘要结果已沉淀" />
+          {showWithResultMetric ? <Metric label="有结果" value={String(libraryCounts.withResult)} detail="摘要结果已沉淀" /> : null}
         </div>
       </section>
 
@@ -100,7 +105,13 @@ export function LibraryPage({
 
         {filteredVideos.length ? (
           <div className="video-grid">
-            {filteredVideos.map((video) => <VideoCard key={video.video_id} video={video} />)}
+            {filteredVideos.map((video) => (
+              <VideoCard
+                key={video.video_id}
+                video={video}
+                onToggleFavorite={onToggleFavorite}
+              />
+            ))}
           </div>
         ) : (
           <div className="library-empty-state">

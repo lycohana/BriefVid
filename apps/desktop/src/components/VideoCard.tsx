@@ -1,18 +1,44 @@
 import { Link } from "react-router-dom";
+import type { MouseEvent } from "react";
 
 import { platformLabel, taskStatusClass } from "../appModel";
 import type { VideoAssetSummary } from "../types";
 import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
 
-export function VideoCard({ video }: { video: VideoAssetSummary }) {
+export function VideoCard({
+  video,
+  onToggleFavorite,
+}: {
+  video: VideoAssetSummary;
+  onToggleFavorite?: (videoId: string, nextFavorite: boolean) => Promise<void>;
+}) {
   const badgeClass = taskStatusClass(video.latest_status);
   const isMultiPageVideo = video.pages.length > 1;
   const platformClass = video.platform ? `is-${video.platform.toLowerCase()}` : "";
+
+  async function handleFavoriteClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    await onToggleFavorite?.(video.video_id, !video.is_favorite);
+  }
+
+  const resultStateLabel = getResultStateLabel(video);
 
   return (
     <Link className="video-card" to={`/videos/${video.video_id}`}>
       <div className="video-card-cover">
         {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-card-placeholder">VIDEO</div>}
+        {onToggleFavorite ? (
+          <button
+            aria-label={video.is_favorite ? "取消收藏" : "收藏视频"}
+            className={`video-card-favorite ${video.is_favorite ? "is-active" : ""}`}
+            title={video.is_favorite ? "取消收藏" : "收藏视频"}
+            type="button"
+            onClick={(event) => void handleFavoriteClick(event)}
+          >
+            <IconFavorite />
+          </button>
+        ) : null}
         <span className="video-duration">{formatDuration(video.duration)}</span>
       </div>
       <div className="video-card-body">
@@ -26,9 +52,38 @@ export function VideoCard({ video }: { video: VideoAssetSummary }) {
         <h3>{video.title}</h3>
         <div className="video-card-meta">
           <span>{formatDateTime(video.updated_at)}</span>
-          <span>{video.has_result ? "摘要已生成" : "等待结果"}</span>
+          <span className="video-card-result-state">{resultStateLabel}</span>
         </div>
       </div>
     </Link>
+  );
+}
+
+function getResultStateLabel(video: VideoAssetSummary) {
+  if (video.has_result) {
+    return "摘要已生成";
+  }
+
+  switch (video.latest_status) {
+    case "running":
+      return "正在生成摘要";
+    case "queued":
+      return "等待开始处理";
+    case "failed":
+      return "本次生成失败";
+    case "cancelled":
+      return "已取消生成";
+    case "completed":
+      return "未产出摘要";
+    default:
+      return "尚未生成摘要";
+  }
+}
+
+function IconFavorite() {
+  return (
+    <svg fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 18.26 4.95 22l1.35-7.84L.6 8.71l7.87-1.14L12 0.5l3.53 7.07 7.87 1.14-5.7 5.45L19.05 22z" />
+    </svg>
   );
 }

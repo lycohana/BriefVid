@@ -45,6 +45,8 @@ class VideoAssetSummaryResponse(BaseModel):
     latest_status: TaskStatus | None = None
     latest_stage: str | None = None
     has_result: bool = False
+    is_favorite: bool = False
+    favorite_updated_at: datetime | None = None
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -68,6 +70,8 @@ class VideoAssetRecord(BaseModel):
     latest_stage: str | None = None
     latest_result: TaskResult | None = None
     latest_error_message: str | None = None
+    is_favorite: bool = False
+    favorite_updated_at: datetime | None = None
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -85,6 +89,8 @@ class VideoAssetRecord(BaseModel):
             latest_status=self.latest_status,
             latest_stage=self.latest_stage,
             has_result=self.latest_result is not None,
+            is_favorite=self.is_favorite,
+            favorite_updated_at=self.favorite_updated_at,
             pages=self.pages,
             created_at=self.created_at,
             updated_at=self.updated_at,

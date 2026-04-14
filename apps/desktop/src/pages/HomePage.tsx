@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import type { ConfigHealth } from "../appModel";
 import { platformLabel } from "../appModel";
@@ -17,7 +17,9 @@ type HomePageProps = {
   onProbe(event: FormEvent): Promise<void>;
   onOpenSetupAssistant(issueKey?: string): void;
   onOpenConfigIssue(issueKey: string): void;
+  favoriteVideos: VideoAssetSummary[];
   recentVideos: VideoAssetSummary[];
+  onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
 };
 
 export function HomePage({
@@ -29,7 +31,9 @@ export function HomePage({
   onProbe,
   onOpenSetupAssistant,
   onOpenConfigIssue,
+  favoriteVideos,
   recentVideos,
+  onToggleFavorite,
 }: HomePageProps) {
   return (
     <section className="home-page">
@@ -94,16 +98,23 @@ export function HomePage({
         )}
       </div>
 
-      <div className="section">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-          <h2 className="section-title" style={{ margin: 0 }}>最近视频</h2>
-          <span className="helper-chip">{recentVideos.length} 个视频</span>
+      {favoriteVideos.length > 0 ? (
+        <div className="section">
+          <VideoSection
+            title="收藏视频"
+            videos={favoriteVideos}
+            onToggleFavorite={onToggleFavorite}
+          />
         </div>
+      ) : null}
 
+      <div className="section">
         {recentVideos.length > 0 ? (
-          <div className="video-grid">
-            {recentVideos.map((video) => <VideoCard key={video.video_id} video={video} />)}
-          </div>
+          <VideoSection
+            title="最近视频"
+            videos={recentVideos}
+            onToggleFavorite={onToggleFavorite}
+          />
         ) : (
           <div className="empty-placeholder">
             还没有视频，先输入一个链接开始总结吧。
@@ -111,5 +122,148 @@ export function HomePage({
         )}
       </div>
     </section>
+  );
+}
+
+function VideoSection({
+  title,
+  videos,
+  onToggleFavorite,
+}: {
+  title: string;
+  videos: VideoAssetSummary[];
+  onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(videos.length > 1);
+  const [cardsPerView, setCardsPerView] = useState(() => getCardsPerView(typeof window === "undefined" ? 1180 : window.innerWidth));
+  const [cardWidth, setCardWidth] = useState(0);
+
+  function getCardsPerView(width: number) {
+    if (width >= 1180) {
+      return 3;
+    }
+    if (width >= 760) {
+      return 2;
+    }
+    return 1;
+  }
+
+  function updateLayout() {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      setCardsPerView(getCardsPerView(typeof window === "undefined" ? 1180 : window.innerWidth));
+      setCanScrollLeft(false);
+      setCanScrollRight(videos.length > 1);
+      return;
+    }
+
+    const nextCardsPerView = getCardsPerView(viewport.clientWidth);
+    const gap = 20;
+    setCardsPerView(nextCardsPerView);
+    setCardWidth((viewport.clientWidth - gap * (nextCardsPerView - 1)) / nextCardsPerView);
+
+    const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+    setCanScrollLeft(viewport.scrollLeft > 8);
+    setCanScrollRight(viewport.scrollLeft < maxScrollLeft - 8);
+  }
+
+  useEffect(() => {
+    updateLayout();
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const handleScroll = () => updateLayout();
+    const handleResize = () => updateLayout();
+
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      viewport.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [videos.length]);
+
+  function scrollByPage(direction: "left" | "right") {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const firstCard = viewport.querySelector<HTMLElement>(".home-carousel-item");
+    const cardWidth = firstCard?.offsetWidth ?? viewport.clientWidth;
+    const gap = 20;
+    const nextOffset = (cardWidth + gap) * cardsPerView * (direction === "left" ? -1 : 1);
+
+    viewport.scrollBy({
+      left: nextOffset,
+      behavior: "smooth",
+    });
+  }
+
+  return (
+    <>
+      <div className="home-carousel-head">
+        <h2 className="section-title home-carousel-title">{title}</h2>
+        <div className="home-carousel-controls">
+          <span className="helper-chip">{videos.length} 个视频</span>
+        </div>
+      </div>
+
+      {videos.length > 0 ? (
+        <div className="home-carousel-shell">
+          <div className="home-carousel-nav-zone home-carousel-nav-zone-left">
+            <button
+              className="home-carousel-button home-carousel-button-left"
+              type="button"
+              onClick={() => scrollByPage("left")}
+              disabled={!canScrollLeft}
+              aria-label={`${title}上一页`}
+            >
+              <IconChevron direction="left" />
+            </button>
+          </div>
+          <div className="home-carousel-stage" ref={viewportRef}>
+            <div className="home-carousel-track">
+              {videos.map((video) => (
+                <div
+                  className="home-carousel-item"
+                  key={video.video_id}
+                  style={cardWidth > 0 ? ({ width: `${cardWidth}px`, flexBasis: `${cardWidth}px` } as CSSProperties) : undefined}
+                >
+                  <VideoCard
+                    video={video}
+                    onToggleFavorite={onToggleFavorite}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="home-carousel-nav-zone home-carousel-nav-zone-right">
+            <button
+              className="home-carousel-button home-carousel-button-right"
+              type="button"
+              onClick={() => scrollByPage("right")}
+              disabled={!canScrollRight}
+              aria-label={`${title}下一页`}
+            >
+              <IconChevron direction="right" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function IconChevron({ direction }: { direction: "left" | "right" }) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true">
+      {direction === "left" ? <path d="m15 18-6-6 6-6" /> : <path d="m9 6 6 6-6 6" />}
+    </svg>
   );
 }

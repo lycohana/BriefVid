@@ -63,6 +63,8 @@ export type VideoAssetSummary = {
   latest_status?: TaskStatus | null;
   latest_stage?: string | null;
   has_result: boolean;
+  is_favorite: boolean;
+  favorite_updated_at?: string | null;
   pages: VideoPageOption[];
   created_at: string;
   updated_at: string;

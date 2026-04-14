@@ -36,12 +36,16 @@ class SqliteTaskRepository:
                     latest_status TEXT,
                     latest_stage TEXT,
                     latest_error_message TEXT,
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    favorite_updated_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
             self._ensure_column(cursor, "video_assets", "page_catalog_json", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(cursor, "video_assets", "is_favorite", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_assets", "favorite_updated_at", "TEXT")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -155,8 +159,9 @@ class SqliteTaskRepository:
                 """
                 INSERT INTO video_assets (
                     video_id, canonical_id, platform, title, source_url, cover_url, duration, page_catalog_json,
-                    latest_task_id, latest_status, latest_stage, latest_error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    latest_task_id, latest_status, latest_stage, latest_error_message, is_favorite, favorite_updated_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(canonical_id) DO UPDATE SET
                     title = excluded.title,
                     source_url = excluded.source_url,
@@ -178,6 +183,8 @@ class SqliteTaskRepository:
                     asset.latest_status.value if asset.latest_status else None,
                     asset.latest_stage,
                     asset.latest_error_message,
+                    1 if asset.is_favorite else 0,
+                    asset.favorite_updated_at.isoformat() if asset.favorite_updated_at else None,
                     created,
                     updated_at,
                 ),
@@ -194,6 +201,7 @@ class SqliteTaskRepository:
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
                     v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
+                    v.is_favorite, v.favorite_updated_at,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
@@ -211,6 +219,7 @@ class SqliteTaskRepository:
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
                     v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
+                    v.is_favorite, v.favorite_updated_at,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
@@ -228,6 +237,7 @@ class SqliteTaskRepository:
                     v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
                     v.page_catalog_json,
                     v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
+                    v.is_favorite, v.favorite_updated_at,
                     v.created_at, v.updated_at, r.result_json AS latest_result_json
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
@@ -428,6 +438,22 @@ class SqliteTaskRepository:
             cursor.execute(f"DELETE FROM tasks WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM video_assets WHERE video_id IN ({placeholders})", tuple(video_ids))
         return True
+
+    def set_video_favorite(self, video_id: str, is_favorite: bool) -> VideoAssetRecord | None:
+        favorite_updated_at = datetime.now(timezone.utc).isoformat() if is_favorite else None
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute("SELECT video_id FROM video_assets WHERE video_id = ?", (video_id,)).fetchone()
+            if row is None:
+                return None
+            cursor.execute(
+                """
+                UPDATE video_assets
+                SET is_favorite = ?, favorite_updated_at = ?
+                WHERE video_id = ?
+                """,
+                (1 if is_favorite else 0, favorite_updated_at, video_id),
+            )
+        return self.get_video_asset(video_id)
 
     def update_status(self, task_id: str, status: TaskStatus) -> TaskRecord | None:
         updated_at = datetime.now(timezone.utc).isoformat()
@@ -654,6 +680,8 @@ class SqliteTaskRepository:
             latest_stage=row["latest_stage"],
             latest_result=latest_result,
             latest_error_message=row["latest_error_message"],
+            is_favorite=bool(row["is_favorite"]),
+            favorite_updated_at=datetime.fromisoformat(row["favorite_updated_at"]) if row["favorite_updated_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
