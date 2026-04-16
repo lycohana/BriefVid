@@ -739,6 +739,22 @@
   overflow: hidden;
 }
 
+.video-card-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  background: var(--bg-subtle);
+}
+
+.video-card-placeholder.is-hidden {
+  display: none;
+}
+
 .video-card-favorite {
   position: absolute;
   top: 10px;

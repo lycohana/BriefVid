@@ -605,6 +605,65 @@
   color: var(--settings-text-soft);
 }
 
+.settings-storage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.settings-storage-card,
+.settings-storage-panel {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  border: 1px solid var(--settings-border);
+  background: var(--settings-elevated-bg);
+}
+
+.settings-storage-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-storage-card-head strong,
+.settings-storage-panel strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.12rem;
+  color: var(--settings-text-strong);
+}
+
+.settings-storage-path {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.settings-storage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--settings-text-soft);
+  font-size: 0.82rem;
+}
+
+.settings-storage-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.settings-storage-panel p {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--settings-text-soft);
+}
+
 .overview-info-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

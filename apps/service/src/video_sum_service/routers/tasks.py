@@ -16,7 +16,8 @@ from video_sum_service.schemas import (
     TaskProgressResponse,
     TaskSummaryResponse,
 )
-from video_sum_service.task_artifacts import load_task_mindmap
+from video_sum_service.context import settings_manager
+from video_sum_service.task_artifacts import cleanup_task_files, load_task_mindmap
 from video_sum_service.video_assets import probe_video_asset
 from video_sum_service.worker import TaskWorker
 
@@ -67,6 +68,11 @@ def get_task(task_id: str, request: Request) -> TaskDetailResponse:
 @router.delete("/{task_id}")
 def delete_task(task_id: str, request: Request) -> dict[str, object]:
     task_store: SqliteTaskRepository = request.app.state.task_repository
+    record = task_store.get_task(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    # 先清理文件，再删除数据库记录：如果文件清理失败，数据库记录仍保留以便重试
+    cleanup_task_files(record, settings_manager.current)
     deleted = task_store.delete_task(task_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Task not found.")

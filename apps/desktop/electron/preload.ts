@@ -52,6 +52,43 @@ export type UpdateInfo = {
   errorMessage: string | null;
 };
 
+export type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
+
+export type StorageDirectoryStat = {
+  key: StorageLocationKind;
+  label: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+};
+
+export type StorageOverview = {
+  generatedAt: string;
+  totals: {
+    managedBytes: number;
+    managedFiles: number;
+    managedDirectories: number;
+  };
+  directories: StorageDirectoryStat[];
+  cleanup: {
+    serviceAvailable: boolean;
+    orphanTaskCount: number;
+    orphanTaskBytes: number;
+    cacheCandidateCount: number;
+    cacheCandidateBytes: number;
+  };
+};
+
+export type StorageCleanupResult = {
+  deletedPaths: string[];
+  deletedCount: number;
+  removedTaskDirs: number;
+  removedCacheEntries: number;
+  reclaimedBytes: number;
+};
+
 const desktop = {
   app: {
     getVersion: () => ipcRenderer.invoke("desktop:app:get-version") as Promise<string>,
@@ -110,6 +147,14 @@ const desktop = {
         ipcRenderer.removeListener("desktop:update:status-changed", wrapped);
       };
     },
+  },
+  fileManager: {
+    getStorageOverview: (input: { dataDir: string; cacheDir: string; tasksDir: string; taskIds?: string[] }) =>
+      ipcRenderer.invoke("desktop:file-manager:get-storage-overview", input) as Promise<StorageOverview>,
+    cleanupOrphans: (input: { cacheDir: string; tasksDir: string; taskIds: string[] }) =>
+      ipcRenderer.invoke("desktop:file-manager:cleanup-orphans", input) as Promise<StorageCleanupResult>,
+    openDirectory: (kind: StorageLocationKind, input: { dataDir: string; cacheDir: string; tasksDir: string }) =>
+      ipcRenderer.invoke("desktop:file-manager:open-directory", kind, input) as Promise<string>,
   },
 };
 

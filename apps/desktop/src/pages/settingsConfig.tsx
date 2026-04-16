@@ -9,10 +9,11 @@ import {
   RobotIcon,
   SettingsIcon,
   SlidersIcon,
+  StorageIcon,
   TerminalIcon,
 } from "../components/AppIcons";
 
-export type SettingsCategory = "overview" | "general" | "directories" | "model" | "llm" | "summary" | "advanced" | "environment" | "updates" | "logs";
+export type SettingsCategory = "overview" | "general" | "directories" | "fileManagement" | "model" | "llm" | "summary" | "advanced" | "environment" | "updates" | "logs";
 export type SettingsCategoryGroup = "workspace" | "system";
 
 export const settingsCategories: Array<{
@@ -25,6 +26,7 @@ export const settingsCategories: Array<{
   { id: "overview", label: "概览", description: "查看服务状态、运行时与关键配置。", group: "workspace", icon: <OverviewIcon /> },
   { id: "general", label: "基础设置", description: "服务监听地址和端口配置。", group: "workspace", icon: <SettingsIcon /> },
   { id: "directories", label: "目录设置", description: "数据、缓存和任务文件存储位置。", group: "workspace", icon: <FolderIcon /> },
+  { id: "fileManagement", label: "文件管理", description: "查看空间占用并清理缓存与孤儿文件。", group: "workspace", icon: <StorageIcon /> },
   { id: "model", label: "模型设置", description: "Whisper 模型、推理设备和选择方式。", group: "workspace", icon: <CpuIcon /> },
   { id: "llm", label: "LLM 设置", description: "大模型摘要能力与 API 接入参数。", group: "workspace", icon: <RobotIcon /> },
   { id: "summary", label: "摘要参数", description: "摘要模式、语言和切块策略。", group: "workspace", icon: <FileTextIcon /> },

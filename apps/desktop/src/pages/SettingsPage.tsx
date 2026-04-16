@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   DesktopState,
@@ -15,7 +15,7 @@ import {
 } from "../appModel";
 import { api } from "../api";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
-import type { EnvironmentInfo, ServiceSettings } from "../types";
+import type { EnvironmentInfo, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview } from "../types";
 import { settingsCategories, type SettingsCategory } from "./settingsConfig";
 
 function SiliconFlowApiKeyHelp() {
@@ -65,6 +65,20 @@ type SettingsPageProps = {
   onOpenUpdateDialog(): void;
 };
 
+function formatStorageSize(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(Math.floor(Math.log(sizeBytes) / Math.log(1024)), units.length - 1);
+  const value = sizeBytes / (1024 ** exponent);
+  return `${value >= 100 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
+}
+
+function formatStorageCount(value: number, noun: string) {
+  return `${new Intl.NumberFormat("zh-CN").format(Math.max(0, value))} ${noun}`;
+}
+
 export function SettingsPage({
   snapshot,
   desktop,
@@ -101,6 +115,10 @@ export function SettingsPage({
   const [asrTestBusy, setAsrTestBusy] = useState(false);
   const [llmTestStatus, setLlmTestStatus] = useState("");
   const [llmTestBusy, setLlmTestBusy] = useState(false);
+  const [storageOverview, setStorageOverview] = useState<StorageOverview | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageCleaning, setStorageCleaning] = useState(false);
+  const [storageStatus, setStorageStatus] = useState("");
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("overview");
   const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
   const [activeFocusTarget, setActiveFocusTarget] = useState<string | null>(null);
@@ -145,6 +163,93 @@ export function SettingsPage({
     }
   }
 
+  const refreshStorageOverview = useCallback(async () => {
+    if (!form || !window.desktop?.fileManager) {
+      setStorageStatus("当前环境不支持文件管理。");
+      return;
+    }
+    try {
+      setStorageLoading(true);
+      setStorageStatus("");
+      let taskIds: string[] | undefined;
+      if (snapshot.serviceOnline) {
+        try {
+          taskIds = (await api.listTasks()).map((task) => task.task_id);
+        } catch {
+          taskIds = undefined;
+        }
+      }
+      const overview = await window.desktop.fileManager.getStorageOverview({
+        dataDir: form.data_dir,
+        cacheDir: form.cache_dir,
+        tasksDir: form.tasks_dir,
+        taskIds,
+      });
+      setStorageOverview(overview);
+      if (!taskIds) {
+        setStorageStatus("服务离线：已展示本地占用情况，清理操作需要在服务在线时确认引用关系。");
+      }
+    } catch (error) {
+      setStorageStatus(error instanceof Error ? error.message : "读取文件占用失败");
+    } finally {
+      setStorageLoading(false);
+    }
+  }, [form, form?.data_dir, form?.cache_dir, form?.tasks_dir, snapshot.serviceOnline]);
+
+  async function openManagedDirectory(kind: StorageLocationKind) {
+    if (!form || !window.desktop?.fileManager) {
+      return;
+    }
+    await window.desktop.fileManager.openDirectory(kind, {
+      dataDir: form.data_dir,
+      cacheDir: form.cache_dir,
+      tasksDir: form.tasks_dir,
+    });
+  }
+
+  async function cleanupManagedFiles() {
+    if (!form || !window.desktop?.fileManager || !serviceOnline) {
+      return;
+    }
+    try {
+      setStorageCleaning(true);
+      setStorageStatus("");
+      const taskIds = (await api.listTasks()).map((task) => task.task_id);
+      const preview = await window.desktop.fileManager.getStorageOverview({
+        dataDir: form.data_dir,
+        cacheDir: form.cache_dir,
+        tasksDir: form.tasks_dir,
+        taskIds,
+      });
+      const targetCount = preview.cleanup.orphanTaskCount + preview.cleanup.cacheCandidateCount;
+      const targetBytes = preview.cleanup.orphanTaskBytes + preview.cleanup.cacheCandidateBytes;
+      if (targetCount <= 0) {
+        setStorageOverview(preview);
+        setStorageStatus("当前没有可安全清理的缓存或孤儿文件。");
+        return;
+      }
+      const confirmed = window.confirm(
+        `将删除 ${targetCount} 项可回收内容，预计释放 ${formatStorageSize(targetBytes)}。\n\n包含：${preview.cleanup.orphanTaskCount} 个孤儿任务目录、${preview.cleanup.cacheCandidateCount} 个缓存项。\n此操作不会删除仍被引用的任务结果。`,
+      );
+      if (!confirmed) {
+        setStorageOverview(preview);
+        setStorageStatus("已取消清理。");
+        return;
+      }
+      const result = await window.desktop.fileManager.cleanupOrphans({
+        cacheDir: form.cache_dir,
+        tasksDir: form.tasks_dir,
+        taskIds,
+      });
+      await refreshStorageOverview();
+      setStorageStatus(`已清理 ${result.deletedCount} 项内容，释放约 ${formatStorageSize(result.reclaimedBytes)}。`);
+    } catch (error) {
+      setStorageStatus(error instanceof Error ? error.message : "清理文件失败");
+    } finally {
+      setStorageCleaning(false);
+    }
+  }
+
   const backendRunning = Boolean(desktop.backend?.running);
   const backendReady = Boolean(desktop.backend?.ready);
   const serviceOnline = snapshot.serviceOnline;
@@ -176,6 +281,17 @@ export function SettingsPage({
   ];
 
   useEffect(() => {
+    if (!form || activeCategory !== "fileManagement") {
+      return;
+    }
+    // 使用 setTimeout 延迟执行，避免阻塞 UI 渲染
+    const timer = window.setTimeout(() => {
+      void refreshStorageOverview();
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [activeCategory, refreshStorageOverview]);
+
+  useEffect(() => {
     if (!cudaInstalling) {
       return;
     }
@@ -195,10 +311,70 @@ export function SettingsPage({
     return () => window.clearInterval(timer);
   }, [cudaInstalling, cudaStartedAt]);
 
+  useEffect(() => {
+    if (!focusIssueRequest || !form) {
+      return;
+    }
+    if (lastHandledExternalFocusNonce.current === focusIssueRequest.nonce) {
+      return;
+    }
+    lastHandledExternalFocusNonce.current = focusIssueRequest.nonce;
+    const target = resolveIssueTarget(focusIssueRequest.issueKey);
+    if (target) {
+      setActiveCategory(target.category);
+      setPendingFocusTarget(target.targetKey);
+    }
+  }, [focusIssueRequest, form]);
+
+  useEffect(() => {
+    if (!pendingFocusTarget) {
+      return;
+    }
+    const targetNode = focusTargetRefs.current[pendingFocusTarget];
+    if (!targetNode) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      targetNode.scrollIntoView({ behavior: "smooth", block: "center" });
+      const focusable = targetNode.matches("input, select, textarea, button")
+        ? targetNode
+        : targetNode.querySelector("input, select, textarea, button");
+      if (focusable instanceof HTMLElement) {
+        focusable.focus({ preventScroll: true });
+      }
+      setActiveFocusTarget(pendingFocusTarget);
+      setPendingFocusTarget(null);
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [activeCategory, pendingFocusTarget]);
+
+  useEffect(() => {
+    if (!activeFocusTarget) {
+      return;
+    }
+    const timer = window.setTimeout(() => setActiveFocusTarget((current) => (current === activeFocusTarget ? null : current)), 2200);
+    return () => window.clearTimeout(timer);
+  }, [activeFocusTarget]);
+
   if (!form) return <section className="grid-card empty-state-card">正在加载设置...</section>;
 
   const usesSiliconFlowAsr = form.transcription_provider === "siliconflow";
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
+  const storageDirectoryMap = new Map((storageOverview?.directories || []).map((entry) => [entry.key, entry]));
+  const cacheDirectory = storageDirectoryMap.get("cache") || null;
+  const tasksDirectory = storageDirectoryMap.get("tasks") || null;
+  const logsDirectory = storageDirectoryMap.get("logs") || null;
+  const runtimeDirectory = storageDirectoryMap.get("runtime") || null;
+  const cleanupReady = Boolean(serviceOnline && storageOverview?.cleanup.serviceAvailable);
+  const cleanupTargetBytes = (storageOverview?.cleanup.orphanTaskBytes || 0) + (storageOverview?.cleanup.cacheCandidateBytes || 0);
+  const cleanupTargetCount = (storageOverview?.cleanup.orphanTaskCount || 0) + (storageOverview?.cleanup.cacheCandidateCount || 0);
+
+  function handleConfigIssueClick(issueKey: string) {
+    const target = resolveIssueTarget(issueKey);
+    if (!target) return;
+    setActiveCategory(target.category);
+    setPendingFocusTarget(target.targetKey);
+  }
 
   function updateForm(next: ServiceSettings) {
     setIsDirty(true);
@@ -375,58 +551,6 @@ export function SettingsPage({
     return null;
   }
 
-  function handleConfigIssueClick(issueKey: string) {
-    const target = resolveIssueTarget(issueKey);
-    if (!target) {
-      return;
-    }
-    setActiveCategory(target.category);
-    setPendingFocusTarget(target.targetKey);
-  }
-
-  useEffect(() => {
-    if (!focusIssueRequest || !form) {
-      return;
-    }
-    if (lastHandledExternalFocusNonce.current === focusIssueRequest.nonce) {
-      return;
-    }
-    lastHandledExternalFocusNonce.current = focusIssueRequest.nonce;
-    handleConfigIssueClick(focusIssueRequest.issueKey);
-  }, [focusIssueRequest, form]);
-
-  useEffect(() => {
-    if (!pendingFocusTarget) {
-      return;
-    }
-    const targetNode = focusTargetRefs.current[pendingFocusTarget];
-    if (!targetNode) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      targetNode.scrollIntoView({ behavior: "smooth", block: "center" });
-      const focusable = targetNode.matches("input, select, textarea, button")
-        ? targetNode
-        : targetNode.querySelector("input, select, textarea, button");
-      if (focusable instanceof HTMLElement) {
-        focusable.focus({ preventScroll: true });
-      }
-      setActiveFocusTarget(pendingFocusTarget);
-      setPendingFocusTarget(null);
-    }, 80);
-
-    return () => window.clearTimeout(timer);
-  }, [activeCategory, pendingFocusTarget]);
-
-  useEffect(() => {
-    if (!activeFocusTarget) {
-      return;
-    }
-    const timer = window.setTimeout(() => setActiveFocusTarget((current) => (current === activeFocusTarget ? null : current)), 2200);
-    return () => window.clearTimeout(timer);
-  }, [activeFocusTarget]);
-
   return (
     <div className="settings-page-wrapper">
       <FloatingNoticeStack
@@ -436,6 +560,7 @@ export function SettingsPage({
           { id: "settings-local-asr-status", message: localAsrStatus },
           { id: "settings-asr-test-status", message: asrTestStatus },
           { id: "settings-llm-test-status", message: llmTestStatus },
+          { id: "settings-storage-status", message: storageStatus },
           { id: "settings-backend-error", message: desktop.backend?.lastError || "", tone: "error" },
           { id: "settings-service-status", message: serviceStatus },
         ]}
@@ -806,6 +931,115 @@ export function SettingsPage({
                   <input className="settings-input-field" value={String(form.tasks_dir)} onChange={(e) => updateForm({ ...form, tasks_dir: e.target.value })} />
                   <span className="settings-input-caption">任务历史记录</span>
                 </label>
+              </div>
+            </section>
+          )}
+
+          {activeCategory === "fileManagement" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>文件管理</h2>
+                <p>查看本地空间占用，并安全清理缓存和孤儿任务目录。</p>
+              </header>
+
+              <div className="settings-update-overview">
+                <div className="settings-update-copy">
+                  <span className="settings-story-kicker">Storage</span>
+                  <h3>当前本地占用</h3>
+                  <p>
+                    已托管空间约 {formatStorageSize(storageOverview?.totals.managedBytes || 0)}，
+                    共 {formatStorageCount(storageOverview?.totals.managedFiles || 0, "文件")}
+                    ，{formatStorageCount(storageOverview?.totals.managedDirectories || 0, "目录")}。
+                  </p>
+                </div>
+                <div className="settings-update-badges">
+                  <span className="helper-chip">{storageLoading ? "扫描中..." : "统计已就绪"}</span>
+                  <span className={`helper-chip ${cleanupReady ? "status-success" : "status-pending"}`}>
+                    {cleanupReady ? "可校验引用关系" : "服务离线，禁用清理"}
+                  </span>
+                  <span className="helper-chip">可回收 {formatStorageSize(cleanupTargetBytes)}</span>
+                </div>
+              </div>
+
+              <div className="settings-storage-grid">
+                {(storageOverview?.directories || []).map((directory) => (
+                  <article key={directory.key} className="settings-storage-card">
+                    <div className="settings-storage-card-head">
+                      <div>
+                        <span className="settings-update-label">{directory.label}</span>
+                        <strong>{formatStorageSize(directory.sizeBytes)}</strong>
+                      </div>
+                      <button className="secondary-button" type="button" onClick={() => void openManagedDirectory(directory.key)}>
+                        打开目录
+                      </button>
+                    </div>
+                    <p className="settings-storage-path">{directory.path}</p>
+                    <div className="settings-storage-meta">
+                      <span>{directory.exists ? "目录存在" : "目录不存在"}</span>
+                      <span>{formatStorageCount(directory.fileCount, "文件")}</span>
+                      <span>{formatStorageCount(directory.directoryCount, "子目录")}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="settings-storage-detail-grid">
+                <article className="settings-storage-panel">
+                  <span className="settings-update-label">缓存目录</span>
+                  <strong>{formatStorageSize(cacheDirectory?.sizeBytes || 0)}</strong>
+                  <p>当前仅把 `uploads` 和 `covers` 视为可安全回收的缓存内容，删除后必要资源会自动重新生成。</p>
+                  <div className="settings-storage-meta">
+                    <span>{formatStorageCount(storageOverview?.cleanup.cacheCandidateCount || 0, "可清理项")}</span>
+                    <span>预计释放 {formatStorageSize(storageOverview?.cleanup.cacheCandidateBytes || 0)}</span>
+                  </div>
+                </article>
+                <article className="settings-storage-panel">
+                  <span className="settings-update-label">任务结果</span>
+                  <strong>{formatStorageSize(tasksDirectory?.sizeBytes || 0)}</strong>
+                  <p>仅识别目录名像任务 ID、但数据库中已不存在的孤儿任务目录，不会删除仍被引用的结果文件。</p>
+                  <div className="settings-storage-meta">
+                    <span>{formatStorageCount(storageOverview?.cleanup.orphanTaskCount || 0, "孤儿目录")}</span>
+                    <span>预计释放 {formatStorageSize(storageOverview?.cleanup.orphanTaskBytes || 0)}</span>
+                  </div>
+                </article>
+                <article className="settings-storage-panel">
+                  <span className="settings-update-label">日志目录</span>
+                  <strong>{formatStorageSize(logsDirectory?.sizeBytes || 0)}</strong>
+                  <p>日志仅展示体积和位置，首版不提供清空操作，避免误删排障信息。</p>
+                </article>
+                <article className="settings-storage-panel">
+                  <span className="settings-update-label">运行时目录</span>
+                  <strong>{formatStorageSize(runtimeDirectory?.sizeBytes || 0)}</strong>
+                  <p>运行时目录只做统计，不参与清理，避免影响 Python、Torch 或 CUDA 运行环境。</p>
+                </article>
+              </div>
+
+              <div className="settings-update-next-step">
+                <strong>清理说明</strong>
+                <span>
+                  {!cleanupReady
+                    ? "当前服务离线，无法确认哪些任务目录仍被数据库引用，因此已禁用一键清理。"
+                    : cleanupTargetCount > 0
+                      ? `预计可安全清理 ${cleanupTargetCount} 项内容，释放约 ${formatStorageSize(cleanupTargetBytes)}。`
+                      : "当前没有发现可安全清理的缓存或孤儿任务目录。"}
+                </span>
+              </div>
+
+              <div className="settings-update-actions">
+                <button className="primary-button" type="button" disabled={storageLoading || storageCleaning} onClick={() => void refreshStorageOverview()}>
+                  {storageLoading ? "扫描中..." : "刷新统计"}
+                </button>
+                <button
+                  className="secondary-button danger-button"
+                  type="button"
+                  disabled={!cleanupReady || storageCleaning || storageLoading}
+                  onClick={() => void cleanupManagedFiles()}
+                >
+                  {storageCleaning ? "清理中..." : "一键清理孤儿项"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => void openManagedDirectory("data")}>
+                  打开数据目录
+                </button>
               </div>
             </section>
           )}

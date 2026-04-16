@@ -220,3 +220,33 @@ export type LlmTestResponse = {
   jsonOutputAvailable?: boolean;
   jsonPreview?: string;
 };
+
+// 文件管理相关类型（与 desktop.d.ts 保持一致）
+export type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
+
+export type StorageDirectoryStat = {
+  key: StorageLocationKind;
+  label: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+};
+
+export type StorageOverview = {
+  generatedAt: string;
+  totals: {
+    managedBytes: number;
+    managedFiles: number;
+    managedDirectories: number;
+  };
+  directories: StorageDirectoryStat[];
+  cleanup: {
+    serviceAvailable: boolean;
+    orphanTaskCount: number;
+    orphanTaskBytes: number;
+    cacheCandidateCount: number;
+    cacheCandidateBytes: number;
+  };
+};

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import type { MouseEvent } from "react";
+import type { MouseEvent, SyntheticEvent } from "react";
 
 import { platformLabel, taskStatusClass } from "../appModel";
 import type { VideoAssetSummary } from "../types";
@@ -24,10 +24,26 @@ export function VideoCard({
 
   const resultStateLabel = getResultStateLabel(video);
 
+  function handleImageError(event: SyntheticEvent<HTMLImageElement>) {
+    const target = event.target as HTMLImageElement;
+    target.style.display = "none";
+    const placeholder = target.parentElement?.querySelector(".video-card-placeholder");
+    if (placeholder) {
+      placeholder.classList.remove("is-hidden");
+    }
+  }
+
   return (
     <Link className="video-card" to={`/videos/${video.video_id}`}>
       <div className="video-card-cover">
-        {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-card-placeholder">VIDEO</div>}
+        {video.cover_url ? (
+          <>
+            <img src={video.cover_url} alt={video.title} loading="lazy" onError={handleImageError} />
+            <div className="video-card-placeholder is-hidden">VIDEO</div>
+          </>
+        ) : (
+          <div className="video-card-placeholder">VIDEO</div>
+        )}
         {onToggleFavorite ? (
           <button
             aria-label={video.is_favorite ? "取消收藏" : "收藏视频"}

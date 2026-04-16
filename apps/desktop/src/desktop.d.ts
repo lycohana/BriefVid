@@ -19,6 +19,45 @@ type UpdateInfo = {
   errorMessage: string | null;
 };
 
+type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
+
+type StorageDirectoryStat = {
+  key: StorageLocationKind;
+  label: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+};
+
+type StorageCleanupSummary = {
+  serviceAvailable: boolean;
+  orphanTaskCount: number;
+  orphanTaskBytes: number;
+  cacheCandidateCount: number;
+  cacheCandidateBytes: number;
+};
+
+type StorageOverview = {
+  generatedAt: string;
+  totals: {
+    managedBytes: number;
+    managedFiles: number;
+    managedDirectories: number;
+  };
+  directories: StorageDirectoryStat[];
+  cleanup: StorageCleanupSummary;
+};
+
+type StorageCleanupResult = {
+  deletedPaths: string[];
+  deletedCount: number;
+  removedTaskDirs: number;
+  removedCacheEntries: number;
+  reclaimedBytes: number;
+};
+
 type DesktopBridge = {
   app: {
     getVersion(): Promise<string>;
@@ -62,6 +101,11 @@ type DesktopBridge = {
     install(): Promise<void>;
     getStatus(): Promise<UpdateInfo>;
     onStatus(listener: (status: UpdateInfo) => void): () => void;
+  };
+  fileManager: {
+    getStorageOverview(input: { dataDir: string; cacheDir: string; tasksDir: string; taskIds?: string[] }): Promise<StorageOverview>;
+    cleanupOrphans(input: { cacheDir: string; tasksDir: string; taskIds: string[] }): Promise<StorageCleanupResult>;
+    openDirectory(kind: StorageLocationKind, input: { dataDir: string; cacheDir: string; tasksDir: string }): Promise<string>;
   };
 };
 

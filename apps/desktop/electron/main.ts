@@ -46,6 +46,56 @@ type UpdateInfo = {
   errorMessage: string | null;
 };
 
+type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
+
+type StorageDirectoryStat = {
+  key: StorageLocationKind;
+  label: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  directoryCount: number;
+};
+
+type StorageOverview = {
+  generatedAt: string;
+  totals: {
+    managedBytes: number;
+    managedFiles: number;
+    managedDirectories: number;
+  };
+  directories: StorageDirectoryStat[];
+  cleanup: {
+    serviceAvailable: boolean;
+    orphanTaskCount: number;
+    orphanTaskBytes: number;
+    cacheCandidateCount: number;
+    cacheCandidateBytes: number;
+  };
+};
+
+type StorageOverviewInput = {
+  dataDir: string;
+  cacheDir: string;
+  tasksDir: string;
+  taskIds?: string[];
+};
+
+type StorageCleanupInput = {
+  cacheDir: string;
+  tasksDir: string;
+  taskIds: string[];
+};
+
+type StorageCleanupResult = {
+  deletedPaths: string[];
+  deletedCount: number;
+  removedTaskDirs: number;
+  removedCacheEntries: number;
+  reclaimedBytes: number;
+};
+
 const isDev = !app.isPackaged;
 const desktopAppVersion = String(desktopPackage.version || "");
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -93,6 +143,14 @@ function getServiceLogPath() {
   return path.join(getLocalAppDataDir(), "briefvid", "logs", "service.log");
 }
 
+function getLogDirPath() {
+  return path.dirname(getServiceLogPath());
+}
+
+function getRuntimeRootPath() {
+  return path.join(getLocalAppDataDir(), "briefvid", "runtime");
+}
+
 const MAX_LOG_CHARS = 20_000;
 const MAX_LOG_LINE_CHARS = 1_000;
 
@@ -130,6 +188,306 @@ function readServiceLogTail(lines = 200) {
       content: error instanceof Error ? error.message : "读取日志失败",
     };
   }
+}
+
+function sanitizeTaskIds(taskIds?: string[]) {
+  const valid = new Set<string>();
+  for (const taskId of taskIds || []) {
+    if (/^[0-9a-f]{32}$/i.test(String(taskId || "").trim())) {
+      valid.add(String(taskId).trim().toLowerCase());
+    }
+  }
+  return valid;
+}
+
+function resolveManagedPath(targetPath: string) {
+  return path.resolve(String(targetPath || ""));
+}
+
+function isPathWithin(parentPath: string, candidatePath: string) {
+  const relative = path.relative(resolveManagedPath(parentPath), resolveManagedPath(candidatePath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * 异步收集路径统计信息（避免阻塞主进程）
+ */
+async function collectPathStats(targetPath: string): Promise<{ exists: boolean; sizeBytes: number; fileCount: number; directoryCount: number }> {
+  const resolvedTarget = resolveManagedPath(targetPath);
+  let stats: fs.Stats;
+  try {
+    stats = await fs.promises.stat(resolvedTarget);
+  } catch {
+    return { exists: false, sizeBytes: 0, fileCount: 0, directoryCount: 0 };
+  }
+
+  if (stats.isFile()) {
+    return { exists: true, sizeBytes: stats.size, fileCount: 1, directoryCount: 0 };
+  }
+
+  let sizeBytes = 0;
+  let fileCount = 0;
+  let directoryCount = 0;
+  const stack = [resolvedTarget];
+
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    // 分批处理，避免单次事件循环处理过多文件
+    for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      try {
+        if (entry.isDirectory()) {
+          directoryCount += 1;
+          stack.push(entryPath);
+          continue;
+        }
+        if (entry.isFile()) {
+          const entryStats = await fs.promises.stat(entryPath);
+          sizeBytes += entryStats.size;
+          fileCount += 1;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // 每处理一批条目后让出事件循环，避免阻塞 UI
+    if (stack.length > 0) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
+
+  return { exists: true, sizeBytes, fileCount, directoryCount };
+}
+
+async function buildDirectoryStat(key: StorageLocationKind, label: string, targetPath: string): Promise<StorageDirectoryStat> {
+  const stats = await collectPathStats(targetPath);
+  return {
+    key,
+    label,
+    path: resolveManagedPath(targetPath),
+    exists: stats.exists,
+    sizeBytes: stats.sizeBytes,
+    fileCount: stats.fileCount,
+    directoryCount: stats.directoryCount,
+  };
+}
+
+function listImmediateEntries(targetPath: string) {
+  try {
+    return fs.readdirSync(targetPath, { withFileTypes: true }).map((entry) => path.join(targetPath, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 获取缓存清理候选项列表
+ *
+ * 清理策略：
+ * 1. uploads 目录：所有文件视为可清理的缓存（用户上传的临时文件）
+ * 2. covers 目录：不清理，封面图需要保留
+ * 3. 已知任务目录中的 mp3 文件：视为可重新生成的缓存，清理以释放空间
+ *
+ * @param cacheDir - 缓存目录路径
+ * @param tasksDir - 任务目录路径（可选）
+ * @param taskIds - 已知任务 ID 列表（用于识别哪些 mp3 属于已知任务）
+ * @returns 可清理的文件路径列表
+ */
+function getCacheCleanupCandidates(cacheDir: string, tasksDir?: string, taskIds?: string[]) {
+  const resolvedCacheDir = resolveManagedPath(cacheDir);
+  const candidates: string[] = [];
+  // 只清理 uploads 目录下的孤儿文件，不清理 covers 目录（封面图需要保留）
+  const targetDir = path.join(resolvedCacheDir, "uploads");
+  if (fs.existsSync(targetDir) && isPathWithin(resolvedCacheDir, targetDir)) {
+    for (const entryPath of listImmediateEntries(targetDir)) {
+      if (isPathWithin(targetDir, entryPath)) {
+        candidates.push(entryPath);
+      }
+    }
+  }
+  // 清理已完成任务的 mp3 文件（保留 jsonl、json 等文本结果）
+  // 只清理已知任务（非孤儿）目录中的 mp3 文件
+  if (tasksDir && Array.isArray(taskIds)) {
+    const resolvedTasksDir = resolveManagedPath(tasksDir);
+    if (fs.existsSync(resolvedTasksDir)) {
+      try {
+        const entries = fs.readdirSync(resolvedTasksDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && /^[0-9a-f]{32}$/i.test(entry.name)) {
+            const taskPath = path.join(resolvedTasksDir, entry.name);
+            const taskId = entry.name.toLowerCase();
+            // 只清理已知任务（非孤儿）目录中的 mp3 文件
+            if (isPathWithin(resolvedTasksDir, taskPath) && taskIds.includes(taskId)) {
+              // 查找任务目录中的所有 mp3 文件
+              try {
+                const taskFiles = fs.readdirSync(taskPath);
+                for (const file of taskFiles) {
+                  if (file.toLowerCase().endsWith(".mp3")) {
+                    candidates.push(path.join(taskPath, file));
+                  }
+                }
+              } catch {
+                // 忽略无法读取的任务目录
+              }
+            }
+          }
+        }
+      } catch {
+        // 忽略无法读取的任务目录
+      }
+    }
+  }
+  return candidates;
+}
+
+function getOrphanTaskDirectories(tasksDir: string, taskIds?: string[]) {
+  const resolvedTasksDir = resolveManagedPath(tasksDir);
+  const knownTaskIds = sanitizeTaskIds(taskIds);
+  if (!fs.existsSync(resolvedTasksDir)) {
+    return [];
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(resolvedTasksDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{32}$/i.test(entry.name))
+    .map((entry) => path.join(resolvedTasksDir, entry.name))
+    .filter((entryPath) => !knownTaskIds.has(path.basename(entryPath).toLowerCase()) && isPathWithin(resolvedTasksDir, entryPath));
+}
+
+async function getStorageOverview(input: StorageOverviewInput): Promise<StorageOverview> {
+  const dataDir = resolveManagedPath(input.dataDir);
+  const cacheDir = resolveManagedPath(input.cacheDir);
+  const tasksDir = resolveManagedPath(input.tasksDir);
+  const logsDir = resolveManagedPath(getLogDirPath());
+  const runtimeDir = resolveManagedPath(getRuntimeRootPath());
+
+  // 并行统计所有目录
+  const directories = await Promise.all([
+    buildDirectoryStat("data", "数据目录", dataDir),
+    buildDirectoryStat("cache", "缓存目录", cacheDir),
+    buildDirectoryStat("tasks", "任务结果", tasksDir),
+    buildDirectoryStat("logs", "日志目录", logsDir),
+    buildDirectoryStat("runtime", "运行时目录", runtimeDir),
+  ]);
+  const dataStats = directories.find((item) => item.key === "data") || directories[0];
+  const logsStats = directories.find((item) => item.key === "logs");
+  const runtimeStats = directories.find((item) => item.key === "runtime");
+  const orphanTaskDirs = getOrphanTaskDirectories(tasksDir, input.taskIds);
+  
+  // 异步计算孤儿目录大小
+  let orphanTaskBytes = 0;
+  for (const entryPath of orphanTaskDirs) {
+    const stats = await collectPathStats(entryPath);
+    orphanTaskBytes += stats.sizeBytes;
+  }
+  
+  const cacheCandidates = getCacheCleanupCandidates(cacheDir, tasksDir, input.taskIds);
+  
+  // 异步计算缓存候选项大小
+  let cacheCandidateBytes = 0;
+  for (const entryPath of cacheCandidates) {
+    const stats = await collectPathStats(entryPath);
+    cacheCandidateBytes += stats.sizeBytes;
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      managedBytes: dataStats.sizeBytes + (logsStats?.sizeBytes || 0) + (runtimeStats?.sizeBytes || 0),
+      managedFiles: dataStats.fileCount + (logsStats?.fileCount || 0) + (runtimeStats?.fileCount || 0),
+      managedDirectories: dataStats.directoryCount + (logsStats?.directoryCount || 0) + (runtimeStats?.directoryCount || 0),
+    },
+    directories,
+    cleanup: {
+      serviceAvailable: Array.isArray(input.taskIds),
+      orphanTaskCount: orphanTaskDirs.length,
+      orphanTaskBytes,
+      cacheCandidateCount: cacheCandidates.length,
+      cacheCandidateBytes,
+    },
+  };
+}
+
+async function removePathIfPresent(targetPath: string): Promise<number> {
+  const resolvedTarget = resolveManagedPath(targetPath);
+  try {
+    const stats = await fs.promises.stat(resolvedTarget);
+    const sizeBytes = (await collectPathStats(resolvedTarget)).sizeBytes;
+    if (stats.isDirectory()) {
+      await fs.promises.rm(resolvedTarget, { recursive: true, force: true });
+    } else {
+      await fs.promises.rm(resolvedTarget, { force: true });
+    }
+    return sizeBytes;
+  } catch {
+    return 0;
+  }
+}
+
+async function cleanupOrphans(input: StorageCleanupInput): Promise<StorageCleanupResult> {
+  const cacheDir = resolveManagedPath(input.cacheDir);
+  const tasksDir = resolveManagedPath(input.tasksDir);
+  const orphanTaskDirs = getOrphanTaskDirectories(tasksDir, input.taskIds);
+  const cacheCandidates = getCacheCleanupCandidates(cacheDir, tasksDir, input.taskIds);
+  const deletedPaths: string[] = [];
+  let reclaimedBytes = 0;
+  let removedTaskDirs = 0;
+  let removedCacheEntries = 0;
+
+  // 删除孤儿任务目录
+  for (const targetPath of orphanTaskDirs) {
+    reclaimedBytes += await removePathIfPresent(targetPath);
+    deletedPaths.push(targetPath);
+    removedTaskDirs += 1;
+  }
+
+  // 删除 uploads 目录中的孤儿文件和任务目录中的 mp3 文件
+  for (const targetPath of cacheCandidates) {
+    reclaimedBytes += await removePathIfPresent(targetPath);
+    deletedPaths.push(targetPath);
+    removedCacheEntries += 1;
+  }
+
+  return {
+    deletedPaths,
+    deletedCount: deletedPaths.length,
+    removedTaskDirs,
+    removedCacheEntries,
+    reclaimedBytes,
+  };
+}
+
+function resolveDirectoryByKind(kind: StorageLocationKind, input: { dataDir: string; cacheDir: string; tasksDir: string }) {
+  if (kind === "logs") {
+    return getLogDirPath();
+  }
+  if (kind === "runtime") {
+    return getRuntimeRootPath();
+  }
+  if (kind === "cache") {
+    return input.cacheDir;
+  }
+  if (kind === "tasks") {
+    return input.tasksDir;
+  }
+  return input.dataDir;
 }
 
 function loadPreferences(): DesktopPreferences {
@@ -1092,6 +1450,13 @@ function registerIpcHandlers() {
   ipcMain.handle("desktop:update:download", async () => downloadUpdate());
   ipcMain.handle("desktop:update:install", () => installAndRestart());
   ipcMain.handle("desktop:update:get-status", () => updateStatus);
+  ipcMain.handle("desktop:file-manager:get-storage-overview", async (_event, input: StorageOverviewInput) => getStorageOverview(input));
+  ipcMain.handle("desktop:file-manager:cleanup-orphans", async (_event, input: StorageCleanupInput) => cleanupOrphans(input));
+  ipcMain.handle("desktop:file-manager:open-directory", (_event, kind: StorageLocationKind, input: { dataDir: string; cacheDir: string; tasksDir: string }) => {
+    const targetPath = resolveDirectoryByKind(kind, input);
+    fs.mkdirSync(targetPath, { recursive: true });
+    return shell.openPath(targetPath);
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();

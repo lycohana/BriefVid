@@ -5,6 +5,7 @@ from pathlib import Path
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult
 from video_sum_infra.config import ServiceSettings
 from video_sum_service.app import _cleanup_video_files
+from video_sum_service.task_artifacts import cleanup_task_files
 from video_sum_service.schemas import TaskRecord, VideoAssetRecord
 
 
@@ -69,3 +70,27 @@ def test_cleanup_video_files_removes_uploaded_local_media_source(tmp_path: Path)
     _cleanup_video_files(video, [], settings)
 
     assert not local_source.exists()
+
+
+def test_cleanup_task_files_removes_single_task_directory(tmp_path: Path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    task_id = "c" * 32
+    task_dir = tasks_dir / task_id
+    task_dir.mkdir(parents=True)
+    summary_path = task_dir / "summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+
+    settings = ServiceSettings(tasks_dir=tasks_dir, cache_dir=tmp_path / "cache")
+    task = TaskRecord(
+        task_id=task_id,
+        task_input=TaskInput(input_type=InputType.URL, source="https://www.bilibili.com/video/BV-task-cleanup", title="测试视频"),
+        result=TaskResult(
+            artifacts={
+                "summary_path": str(summary_path),
+            }
+        ),
+    )
+
+    cleanup_task_files(task, settings)
+
+    assert not task_dir.exists()

@@ -73,6 +73,15 @@ def cleanup_video_files(video: VideoAssetRecord, tasks: list[TaskRecord], curren
             logger.warning("failed to remove cached local media source: %s", source_path, exc_info=True)
 
 
+def cleanup_task_files(task: TaskRecord, current_settings: ServiceSettings) -> None:
+    for directory in task_artifact_directories([task], current_settings.tasks_dir):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=False)
+        except OSError:
+            logger.warning("failed to remove task directory: %s", directory, exc_info=True)
+
+
 def load_task_segments(summary_path: str) -> list[dict[str, object]]:
     try:
         payload = json.loads(Path(summary_path).read_text(encoding="utf-8"))

@@ -158,6 +158,9 @@ export const api = {
   getTaskEvents(taskId: string) {
     return fetchJson<TaskEvent[]>(`/api/v1/tasks/${taskId}/events`);
   },
+  listTasks() {
+    return fetchJson<TaskSummary[]>("/api/v1/tasks");
+  },
   getTaskMindMap(taskId: string) {
     return fetchJson<TaskMindMapResponse>(`/api/v1/tasks/${taskId}/mindmap`);
   },

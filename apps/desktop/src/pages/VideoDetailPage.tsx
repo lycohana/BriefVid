@@ -1027,24 +1027,24 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                 setStatus(error instanceof Error ? error.message : "打开本地视频失败");
               })}
             >
-              {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
               <div className="video-detail-cover-overlay">
                 <IconPlayCircle className="video-detail-play-icon" />
               </div>
-              <div className="detail-duration-badge">{formatDuration(video.duration)}</div>
+              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
             </button>
           ) : isLocalVideo ? (
             <div className="video-detail-cover">
-              {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
-              <div className="detail-duration-badge">{formatDuration(video.duration)}</div>
+              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
             </div>
           ) : (
             <a className="video-detail-cover" href={heroSourceTarget} target="_blank" rel="noreferrer">
-              {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
               <div className="video-detail-cover-overlay">
                 <IconPlayCircle className="video-detail-play-icon" />
               </div>
-              <div className="detail-duration-badge">{formatDuration(video.duration)}</div>
+              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
             </a>
           )}
 
@@ -1547,11 +1547,11 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               controls
                               preload="metadata"
                               src={localPlayerUrl}
-                              poster={video.cover_url || undefined}
+                              poster={currentPage?.cover_url || video.cover_url || undefined}
                             />
                             <div className="detail-video-export-mask" aria-hidden="true">
-                              {video.cover_url ? (
-                                <img className="detail-video-export-cover" src={video.cover_url} alt="" />
+                              {currentPage?.cover_url || video.cover_url ? (
+                                <img className="detail-video-export-cover" src={currentPage?.cover_url || video.cover_url} alt="" />
                               ) : (
                                 <div className="detail-video-export-mask-copy">
                                   <strong>{video.title}</strong>
@@ -1578,8 +1578,8 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               title={`${video.title} 播放器`}
                             />
                             <div className="detail-video-export-mask" aria-hidden="true">
-                              {video.cover_url ? (
-                                <img className="detail-video-export-cover" src={video.cover_url} alt="" />
+                              {currentPage?.cover_url || video.cover_url ? (
+                                <img className="detail-video-export-cover" src={currentPage?.cover_url || video.cover_url} alt="" />
                               ) : (
                                 <div className="detail-video-export-mask-copy">
                                   <strong>{video.title}</strong>
