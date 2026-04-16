@@ -117,6 +117,7 @@ const FLOATING_PLAYER_DEFAULT_WIDTH = 360;
 const FLOATING_PLAYER_VIEWPORT_MARGIN = 20;
 const FLOATING_PLAYER_TOP_OFFSET = 92;
 const FLOATING_PLAYER_CHROME_HEIGHT = 62;
+const LOCAL_VIDEO_SUFFIXES = new Set([".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".flv", ".m4v", ".ts", ".mpeg", ".mpg"]);
 
 const detailTabs: Array<{ id: DetailTab; label: string; description: string }> = [
   { id: "knowledge", label: "知识卡片", description: "按概览、要点、章节整理当前任务结果。" },
@@ -226,6 +227,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const taskPopoverRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const knowledgeExportRef = useRef<HTMLElement | null>(null);
   const lastChapterGroupSignatureRef = useRef("");
   const activeVideoIdRef = useRef(videoId);
@@ -819,6 +821,22 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
     return withPlayerSeek(playerDescriptor.embedUrl, playerDescriptor.platform, playerSeekTarget.seconds, playerSeekTarget.nonce);
   }, [playerDescriptor, playerSeekTarget]);
+  const localPlayerUrl = useMemo(() => {
+    if (!video || String(video.platform || "").toLowerCase() !== "local") {
+      return null;
+    }
+    const source = currentPage?.source_url || video.source_url;
+    const suffix = (() => {
+      try {
+        return `.${new URL(source, window.location.origin).pathname.split(".").pop()?.toLowerCase() || ""}`;
+      } catch {
+        const parts = String(source || "").split(".");
+        return parts.length > 1 ? `.${parts[parts.length - 1].toLowerCase()}` : "";
+      }
+    })();
+    return LOCAL_VIDEO_SUFFIXES.has(suffix) ? `/api/v1/videos/${video.video_id}/media` : null;
+  }, [currentPage?.source_url, video]);
+  const hasSeekablePlayer = Boolean(localPlayerUrl || playerDescriptor);
   const readyMindMap = selectedMindMap?.status === "ready" && selectedTaskDetail?.result?.mindmap_status !== "generating"
     ? selectedMindMap.mindmap ?? null
     : null;
@@ -902,10 +920,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   }, [readyMindMapRoot]);
 
   function handleSeekToChapter(seconds: number | null) {
-    if (!playerDescriptor || seconds == null) {
+    if (seconds == null) {
       return;
     }
     setPlayerSeekTarget((current) => ({ nonce: current.nonce + 1, seconds }));
+    if (activeTab === "knowledge" && localPlayerUrl && localVideoRef.current) {
+      localVideoRef.current.currentTime = seconds;
+      void localVideoRef.current.play().catch(() => {});
+    } else if (!playerDescriptor && !localPlayerUrl) {
+      return;
+    }
     if (activeTab === "knowledge") {
       playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -1510,7 +1534,34 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       </div>
                       <h4 className="detail-section-title">{overviewCard?.title || "核心概览"}</h4>
                       {overviewCard?.content ? <MarkdownContent className="detail-section-body markdown-content-body" compact content={overviewCard.content} /> : <p className="detail-section-body">当前任务还没有生成核心概览。</p>}
-                      {playerEmbedUrl && playerDescriptor ? (
+                      {localPlayerUrl ? (
+                        <div className="detail-overview-player" ref={playerFrameRef}>
+                          <div className="detail-section-heading">
+                            <h3 className="detail-section-label">Player</h3>
+                            <span className="detail-section-meta detail-section-link">本地视频播放器</span>
+                          </div>
+                          <div className="detail-video-embed-frame">
+                            <video
+                              ref={localVideoRef}
+                              className="detail-video-embed detail-local-video"
+                              controls
+                              preload="metadata"
+                              src={localPlayerUrl}
+                              poster={video.cover_url || undefined}
+                            />
+                            <div className="detail-video-export-mask" aria-hidden="true">
+                              {video.cover_url ? (
+                                <img className="detail-video-export-cover" src={video.cover_url} alt="" />
+                              ) : (
+                                <div className="detail-video-export-mask-copy">
+                                  <strong>{video.title}</strong>
+                                  <span>导出知识卡片时会保留当前视频封面，不直接导出播放器画面。</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : playerEmbedUrl && playerDescriptor ? (
                         <div className="detail-overview-player" ref={playerFrameRef}>
                           <div className="detail-section-heading">
                             <h3 className="detail-section-label">Player</h3>
@@ -1604,7 +1655,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                       card={card}
                                       index={index}
                                       key={card.id}
-                                      onSeekToTimestamp={playerDescriptor ? handleSeekToChapter : undefined}
+                                      onSeekToTimestamp={hasSeekablePlayer ? handleSeekToChapter : undefined}
                                     />
                                   ))}
                                 </div>
@@ -1691,7 +1742,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                 <span className="detail-mindmap-inspector-kicker">{formatMindMapNodeType(selectedMindMapNode.type)}</span>
                                 <h4>{sanitizeMindMapLabel(selectedMindMapNode.label, selectedMindMapNode.summary)}</h4>
                               </div>
-                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && playerDescriptor ? (
+                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && hasSeekablePlayer ? (
                                 <button
                                   className="detail-mindmap-seek-button"
                                   type="button"
@@ -1709,7 +1760,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               <div className="detail-mindmap-inspector-tags">
                                 {selectedMindMapNode.source_chapter_titles.slice(0, 3).map((title: string, index: number) => {
                                   const timestamp = selectedMindMapNode.source_chapter_starts[index] ?? null;
-                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && Boolean(playerDescriptor);
+                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && hasSeekablePlayer;
                                   const label = `${title}${shouldDisplayMindMapTimestamp(timestamp) ? ` · ${formatDuration(timestamp!)}` : ""}`;
 
                                   if (canSeek) {
@@ -1810,11 +1861,13 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               </section>
             ) : null}
 
-            {playerEmbedUrl && playerDescriptor && activeTab === "mindmap" ? (
+            {(activeTab === "summary" || activeTab === "mindmap") && (localPlayerUrl || (playerEmbedUrl && playerDescriptor)) ? (
               <FloatingVideoPlayer
                 embedUrl={playerEmbedUrl}
-                openLabel={playerDescriptor.openLabel}
-                sourceUrl={playerDescriptor.sourceUrl}
+                localVideoUrl={localPlayerUrl}
+                openLabel={playerDescriptor?.openLabel}
+                sourceUrl={playerDescriptor?.sourceUrl}
+                seekTarget={playerSeekTarget}
                 title={video.title}
               />
             ) : null}
@@ -2208,13 +2261,17 @@ const mindMapNodeTypes = {
 
 function FloatingVideoPlayer({
   embedUrl,
+  localVideoUrl,
   openLabel,
   sourceUrl,
+  seekTarget,
   title,
 }: {
-  embedUrl: string;
-  openLabel: string;
-  sourceUrl: string;
+  embedUrl: string | null;
+  localVideoUrl: string | null;
+  openLabel?: string | null;
+  sourceUrl?: string | null;
+  seekTarget: PlayerSeekTarget;
   title: string;
 }) {
   const pointerStateRef = useRef<{
@@ -2229,6 +2286,7 @@ function FloatingVideoPlayer({
     }
     return createDefaultFloatingPlayerLayout(window.innerWidth, window.innerHeight);
   });
+  const localFloatingVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     function handleViewportResize() {
@@ -2277,6 +2335,14 @@ function FloatingVideoPlayer({
     };
   }, []);
 
+  useEffect(() => {
+    if (!localVideoUrl || !localFloatingVideoRef.current || seekTarget.seconds == null) {
+      return;
+    }
+    localFloatingVideoRef.current.currentTime = seekTarget.seconds;
+    void localFloatingVideoRef.current.play().catch(() => {});
+  }, [localVideoUrl, seekTarget]);
+
   function handlePointerStart(mode: "drag" | "resize", event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0) {
       return;
@@ -2312,26 +2378,38 @@ function FloatingVideoPlayer({
           <span className="detail-floating-player-kicker">Player</span>
           <strong>{title}</strong>
         </div>
-        <a
-          className="detail-floating-player-link"
-          href={sourceUrl}
-          target="_blank"
-          rel="noreferrer"
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {openLabel}
-        </a>
+        {sourceUrl && openLabel ? (
+          <a
+            className="detail-floating-player-link"
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            {openLabel}
+          </a>
+        ) : null}
       </div>
       <div className="detail-video-embed-frame detail-video-embed-frame-floating">
-        <iframe
-          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-          allowFullScreen
-          className="detail-video-embed"
-          referrerPolicy="strict-origin-when-cross-origin"
-          scrolling="no"
-          src={embedUrl}
-          title={`${title} 悬浮播放器`}
-        />
+        {localVideoUrl ? (
+          <video
+            ref={localFloatingVideoRef}
+            className="detail-video-embed detail-local-video"
+            controls
+            preload="metadata"
+            src={localVideoUrl}
+          />
+        ) : embedUrl ? (
+          <iframe
+            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+            allowFullScreen
+            className="detail-video-embed"
+            referrerPolicy="strict-origin-when-cross-origin"
+            scrolling="no"
+            src={embedUrl}
+            title={`${title} 悬浮播放器`}
+          />
+        ) : null}
       </div>
       <div
         className="detail-floating-player-resize"

@@ -12,6 +12,7 @@ import {
   Menu,
   MenuItemConstructorOptions,
   nativeImage,
+  OpenDialogOptions,
   shell,
   Tray,
 } from "electron";
@@ -1061,7 +1062,7 @@ function registerIpcHandlers() {
     clipboard.writeImage(image);
   });
   ipcMain.handle("desktop:media:pick-video-file", async () => {
-    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+    const dialogOptions: OpenDialogOptions = {
       title: "选择本地视频",
       properties: ["openFile"],
       filters: [
@@ -1070,7 +1071,10 @@ function registerIpcHandlers() {
           extensions: ["mp4", "mov", "mkv", "avi", "wmv", "webm", "flv", "m4v", "ts", "mpeg", "mpg"],
         },
       ],
-    });
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   ipcMain.handle("desktop:shell:open-path", (_event, targetPath: string) => shell.openPath(targetPath));

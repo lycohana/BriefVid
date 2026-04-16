@@ -51,3 +51,25 @@ def test_upload_local_video_uses_uploaded_file_name(monkeypatch, tmp_path) -> No
     assert response.video.platform == "local"
     assert response.video.title == "web-demo"
     assert response.video.source_url.endswith(".mp4")
+
+
+def test_get_local_video_media_returns_file_response(tmp_path) -> None:
+    repository = create_repository()
+    local_file = tmp_path / "playable.mp4"
+    local_file.write_bytes(b"video-bytes")
+    asset = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="local-playable",
+            platform="local",
+            title="可播放视频",
+            source_url=str(local_file),
+            cover_url="/media/covers/local-playable.jpg",
+            duration=6.0,
+        )
+    )
+    app.state.task_repository = repository
+
+    response = video_router.get_local_video_media(asset.video_id, type("Request", (), {"app": app})())
+
+    assert str(response.path).endswith("playable.mp4")
+    assert response.media_type == "video/mp4"

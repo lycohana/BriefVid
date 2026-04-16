@@ -47,3 +47,25 @@ def test_cleanup_video_files_removes_task_directories_and_cached_cover(tmp_path:
 
     assert not task_dir.exists()
     assert not cover_path.exists()
+
+
+def test_cleanup_video_files_removes_uploaded_local_media_source(tmp_path: Path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    cache_dir = tmp_path / "cache"
+    uploads_dir = cache_dir / "uploads"
+    uploads_dir.mkdir(parents=True)
+    local_source = uploads_dir / "demo.mp4"
+    local_source.write_bytes(b"video")
+
+    settings = ServiceSettings(tasks_dir=tasks_dir, cache_dir=cache_dir)
+    video = VideoAssetRecord(
+        canonical_id="local-upload-demo",
+        platform="local",
+        title="本地上传视频",
+        source_url=str(local_source),
+        cover_url="",
+    )
+
+    _cleanup_video_files(video, [], settings)
+
+    assert not local_source.exists()

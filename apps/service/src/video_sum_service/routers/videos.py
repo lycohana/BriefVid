@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 
 from video_sum_core.models.tasks import InputType, TaskInput
 
@@ -149,6 +150,40 @@ def get_video(video_id: str, request: Request) -> VideoAssetDetailResponse:
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found.")
     return localize_video_cover(task_store, video).to_detail()
+
+
+@router.get("/{video_id}/media")
+def get_local_video_media(video_id: str, request: Request) -> FileResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    if str(video.platform or "").lower() != "local":
+        raise HTTPException(status_code=400, detail="当前视频不支持本地播放器。")
+
+    source_path = Path(str(video.source_url or "")).expanduser()
+    try:
+        resolved_path = source_path.resolve()
+    except OSError:
+        resolved_path = source_path
+    if not resolved_path.exists() or not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail="本地视频文件不存在或已被移动。")
+    if not is_supported_local_media_file(resolved_path):
+        raise HTTPException(status_code=400, detail="当前文件类型不支持本地播放器。")
+
+    media_type = None
+    suffix = resolved_path.suffix.lower()
+    if suffix == ".mp4":
+        media_type = "video/mp4"
+    elif suffix == ".webm":
+        media_type = "video/webm"
+    elif suffix in {".mov", ".m4v"}:
+        media_type = "video/quicktime"
+    elif suffix == ".ogg":
+        media_type = "audio/ogg"
+    elif suffix == ".mp3":
+        media_type = "audio/mpeg"
+    return FileResponse(resolved_path, media_type=media_type, filename=resolved_path.name)
 
 
 @router.delete("/{video_id}")
