@@ -13,7 +13,7 @@ import {
   TerminalIcon,
 } from "../components/AppIcons";
 
-export type SettingsCategory = "overview" | "general" | "directories" | "fileManagement" | "model" | "llm" | "summary" | "advanced" | "environment" | "updates" | "logs";
+export type SettingsCategory = "overview" | "general" | "directories" | "fileManagement" | "model" | "llm" | "summary" | "performance" | "advanced" | "environment" | "updates" | "logs";
 export type SettingsCategoryGroup = "workspace" | "system";
 
 export const settingsCategories: Array<{
@@ -30,6 +30,7 @@ export const settingsCategories: Array<{
   { id: "model", label: "模型设置", description: "Whisper 模型、推理设备和选择方式。", group: "workspace", icon: <CpuIcon /> },
   { id: "llm", label: "LLM 设置", description: "大模型摘要能力与 API 接入参数。", group: "workspace", icon: <RobotIcon /> },
   { id: "summary", label: "摘要参数", description: "摘要模式、语言和切块策略。", group: "workspace", icon: <FileTextIcon /> },
+  { id: "performance", label: "性能调优", description: "任务级并发和摘要吞吐控制。", group: "system", icon: <SlidersIcon /> },
   { id: "advanced", label: "高级设置", description: "CUDA 变体、运行时通道和缓存行为。", group: "system", icon: <SlidersIcon /> },
   { id: "environment", label: "运行环境", description: "检查 Python、Torch、GPU 与 CUDA 状态。", group: "system", icon: <MonitorIcon /> },
   { id: "updates", label: "应用更新", description: "检查桌面应用新版本并管理安装。", group: "system", icon: <SettingsIcon /> },

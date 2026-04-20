@@ -185,6 +185,8 @@ export type ServiceSettings = {
   summary_user_prompt_template: string;
   summary_chunk_target_chars: number;
   summary_chunk_overlap_segments: number;
+  task_concurrency: number;
+  mindmap_concurrency: number;
   summary_chunk_concurrency: number;
   summary_chunk_retry_count: number;
   settings_file_exists?: boolean;

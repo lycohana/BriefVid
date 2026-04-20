@@ -1,7 +1,9 @@
 import logging
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Thread
+from threading import Condition, Lock, Thread
 
 from video_sum_core.models.tasks import TaskResult, TaskStatus
 from video_sum_core.pipeline.base import PipelineContext, PipelineRunner
@@ -11,8 +13,30 @@ from video_sum_service.schemas import TaskRecord
 logger = logging.getLogger("video_sum_service.worker")
 
 
+@dataclass(frozen=True)
+class _MindmapJob:
+    task_id: str
+    force: bool
+
+
+class _TaskQueueState:
+    def __init__(self, name: str, concurrency: int) -> None:
+        self.name = name
+        self.concurrency = max(1, int(concurrency))
+        self.pending: deque[object] = deque()
+        self.pending_ids: set[str] = set()
+        self.running_ids: set[str] = set()
+
+    def job_id_for(self, job: object) -> str:
+        if isinstance(job, TaskRecord):
+            return job.task_id
+        if isinstance(job, _MindmapJob):
+            return job.task_id
+        raise TypeError(f"Unsupported job type: {type(job)!r}")
+
+
 class TaskWorker:
-    """Very small background worker used to execute placeholder tasks."""
+    """Background worker with separate queues for summary and mindmap work."""
 
     def __init__(
         self,
@@ -20,26 +44,118 @@ class TaskWorker:
         pipeline_runner: PipelineRunner,
         *,
         auto_generate_mindmap: bool = False,
+        task_concurrency: int = 1,
+        mindmap_concurrency: int = 1,
     ) -> None:
         self._repository = repository
         self._pipeline_runner = pipeline_runner
         self._auto_generate_mindmap = auto_generate_mindmap
+        self._task_state = _TaskQueueState("task", task_concurrency)
+        self._mindmap_state = _TaskQueueState("mindmap", mindmap_concurrency)
+        self._lock = Lock()
+        self._condition = Condition(self._lock)
+        self._accept_new_work = True
+        self._shutdown_requested = False
+        self._dispatch_threads = [
+            Thread(target=self._dispatch_loop, args=(self._task_state, self._run_task_job), daemon=True),
+            Thread(target=self._dispatch_loop, args=(self._mindmap_state, self._run_mindmap_job), daemon=True),
+        ]
+        for thread in self._dispatch_threads:
+            thread.start()
 
     def submit(self, task: TaskRecord) -> None:
         logger.info(
-            "queue task task_id=%s video_id=%s input_type=%s source=%s",
+            "queue summary task task_id=%s video_id=%s input_type=%s source=%s",
             task.task_id,
             task.video_id,
             task.task_input.input_type.value,
             task.task_input.source,
         )
-        thread = Thread(target=self._run_task, args=(task.task_id,), daemon=True)
-        thread.start()
+        enqueued = self._enqueue(self._task_state, task)
+        if enqueued:
+            self._repository.update_status(task.task_id, TaskStatus.QUEUED)
+            self._repository.append_event(
+                task_id=task.task_id,
+                stage="queued",
+                progress=0,
+                message="任务已进入后台队列",
+            )
 
     def submit_mindmap(self, task_id: str, *, force: bool = False) -> None:
-        logger.info("queue task mindmap generation task_id=%s force=%s", task_id, force)
-        thread = Thread(target=self._run_mindmap, args=(task_id, force), daemon=True)
-        thread.start()
+        logger.info("queue mindmap generation task_id=%s force=%s", task_id, force)
+        enqueued = self._enqueue(self._mindmap_state, _MindmapJob(task_id=task_id, force=force))
+        if enqueued:
+            self._repository.append_event(
+                task_id=task_id,
+                stage="mindmap_queued",
+                progress=100,
+                message="思维导图已进入后台队列",
+                payload={"force": force},
+            )
+
+    def close_for_new_work(self) -> None:
+        with self._condition:
+            self._accept_new_work = False
+            self._condition.notify_all()
+
+    def shutdown(self, wait: bool = False) -> None:
+        with self._condition:
+            self._accept_new_work = False
+            self._shutdown_requested = True
+            self._condition.notify_all()
+        if wait:
+            for thread in self._dispatch_threads:
+                thread.join()
+
+    def _enqueue(self, state: _TaskQueueState, job: object) -> bool:
+        job_id = state.job_id_for(job)
+        with self._condition:
+            if not self._accept_new_work:
+                logger.info("reject new %s job because worker is closed task_id=%s", state.name, job_id)
+                return False
+            if job_id in state.pending_ids or job_id in state.running_ids:
+                logger.info("skip duplicate %s job task_id=%s", state.name, job_id)
+                return False
+            state.pending.append(job)
+            state.pending_ids.add(job_id)
+            self._condition.notify_all()
+            return True
+
+    def _dispatch_loop(self, state: _TaskQueueState, runner) -> None:
+        while True:
+            job = self._wait_for_available_job(state)
+            if job is None:
+                return
+            job_id = state.job_id_for(job)
+            thread = Thread(target=self._execute_job, args=(state, job, runner), daemon=True, name=f"{state.name}-{job_id}")
+            thread.start()
+
+    def _wait_for_available_job(self, state: _TaskQueueState) -> object | None:
+        with self._condition:
+            while True:
+                if self._shutdown_requested and not state.pending and not state.running_ids:
+                    return None
+                if not self._accept_new_work and not state.pending and not state.running_ids:
+                    return None
+                if state.pending and len(state.running_ids) < state.concurrency:
+                    job = state.pending.popleft()
+                    job_id = state.job_id_for(job)
+                    state.pending_ids.discard(job_id)
+                    state.running_ids.add(job_id)
+                    return job
+                self._condition.wait()
+
+    def _execute_job(self, state: _TaskQueueState, job: object, runner) -> None:
+        job_id = state.job_id_for(job)
+        try:
+            runner(job)
+        finally:
+            with self._condition:
+                state.running_ids.discard(job_id)
+                self._condition.notify_all()
+
+    def _run_task_job(self, task: TaskRecord) -> None:
+        self._run_task(task.task_id)
 
     def _run_task(self, task_id: str) -> None:
         record = self._repository.get_task(task_id)
@@ -54,12 +170,6 @@ class TaskWorker:
             record.task_input.title,
         )
 
-        self._repository.append_event(
-            task_id=task_id,
-            stage="queued",
-            progress=0,
-            message="任务已进入后台队列",
-        )
         self._repository.update_status(task_id, TaskStatus.RUNNING)
         self._repository.append_event(
             task_id=task_id,
@@ -99,7 +209,7 @@ class TaskWorker:
                 on_event=handle_pipeline_event,
             )
 
-            events, result = self._pipeline_runner.run(
+            _, result = self._pipeline_runner.run(
                 context,
                 on_event=handle_pipeline_event,
             )
@@ -122,13 +232,6 @@ class TaskWorker:
                 len(final_result.transcript_text or ""),
             )
             if self._auto_generate_mindmap and self._can_auto_generate_mindmap(final_result):
-                self._repository.append_event(
-                    task_id=task_id,
-                    stage="mindmap_queued",
-                    progress=100,
-                    message="已按设置自动发起思维导图生成",
-                    payload={"automatic": True},
-                )
                 self.submit_mindmap(task_id)
         except Exception as exc:
             logger.exception("task failed task_id=%s error=%s", task_id, exc)
@@ -147,6 +250,9 @@ class TaskWorker:
             result.knowledge_note_markdown.strip()
             and result.artifacts.get("summary_path")
         )
+
+    def _run_mindmap_job(self, job: _MindmapJob) -> None:
+        self._run_mindmap(job.task_id, job.force)
 
     def _run_mindmap(self, task_id: str, force: bool) -> None:
         record = self._repository.get_task(task_id)

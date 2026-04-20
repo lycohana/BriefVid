@@ -25,6 +25,7 @@ from video_sum_service.video_assets import (
     infer_local_input_type,
     is_supported_local_media_file,
     localize_video_cover,
+    merge_video_asset_metadata,
     probe_local_video_asset,
     probe_video_asset,
     resolve_video_page,
@@ -102,7 +103,7 @@ def probe_video(request: VideoProbeRequest, app_request: Request) -> VideoProbeR
     probed, pages, requires_selection = probe_video_asset(request.url, request.force_refresh)
     existing = task_store.get_video_asset_by_canonical_id(probed.canonical_id)
     cached = existing is not None and not request.force_refresh
-    asset = existing if cached else task_store.upsert_video_asset(probed)
+    asset = existing if cached else task_store.upsert_video_asset(merge_video_asset_metadata(existing, probed) if existing else probed)
     asset = localize_video_cover(task_store, asset)
     return VideoProbeResponse(
         video=asset.to_summary(),
@@ -223,13 +224,14 @@ def create_video_task(
         raise HTTPException(status_code=400, detail="Selected page not found.")
     if page and (not video.cover_url or video.duration is None or page.cover_url == "" or page.duration is None):
         refreshed_video, _, _ = probe_video_asset(page.source_url, force_refresh=False)
-        merged_pages = refreshed_video.pages or video.pages
+        merged_video = merge_video_asset_metadata(video, refreshed_video)
+        merged_pages = merged_video.pages or video.pages
         merged_page = next((item for item in merged_pages if item.page == page.page), page)
         video = task_store.upsert_video_asset(
             video.model_copy(
                 update={
-                    "cover_url": refreshed_video.cover_url or video.cover_url,
-                    "duration": refreshed_video.duration if refreshed_video.duration is not None else video.duration,
+                    "cover_url": merged_video.cover_url or video.cover_url,
+                    "duration": merged_video.duration if merged_video.duration is not None else video.duration,
                     "pages": merged_pages,
                 }
             )

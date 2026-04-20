@@ -1057,7 +1057,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
             <h2 className="video-detail-title">{video.title}</h2>
             {availablePages.length ? (
               <div className="detail-page-switcher">
-                <span className="detail-page-switcher-label">当前分 P</span>
+                <span className="detail-page-switcher-label">当前分P</span>
                 <select
                   className="detail-page-select"
                   value={effectivePageNumber ?? ""}

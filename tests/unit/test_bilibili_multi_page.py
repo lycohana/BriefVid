@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
+
 from video_sum_core.utils import normalize_video_url
 from video_sum_service import app as service_app
+from video_sum_service.repository import SqliteTaskRepository
+from video_sum_service.routers import videos as videos_router
+from video_sum_service.schemas import VideoAssetRecord, VideoPageOptionResponse
 
 
 class _FakeYoutubeDL:
@@ -113,6 +118,124 @@ def test_probe_video_asset_returns_selected_page_when_page_is_explicit(monkeypat
     assert asset.title == "测试合集"
     assert asset.pages[1].title == "P2 正片"
     assert len(pages) == 2
+
+
+def test_merge_video_asset_metadata_preserves_existing_cover_for_multi_page_refresh() -> None:
+    existing = VideoAssetRecord(
+        canonical_id="BV1xx411c7mD",
+        platform="bilibili",
+        title="测试合集",
+        source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+        cover_url="/media/covers/BV1xx411c7mD.jpg",
+        duration=120.0,
+        pages=[
+            VideoPageOptionResponse(
+                page=1,
+                title="P1 开场",
+                source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+                cover_url="https://example.com/p1.jpg",
+                duration=61.0,
+            ),
+            VideoPageOptionResponse(
+                page=2,
+                title="P2 正片",
+                source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=2",
+                cover_url="https://example.com/p2.jpg",
+                duration=95.0,
+            ),
+        ],
+    )
+    refreshed = VideoAssetRecord(
+        canonical_id="BV1xx411c7mD",
+        platform="bilibili",
+        title="测试合集",
+        source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+        cover_url="",
+        duration=None,
+        pages=[
+            VideoPageOptionResponse(
+                page=1,
+                title="P1 开场",
+                source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+                cover_url="",
+                duration=None,
+            ),
+            VideoPageOptionResponse(
+                page=2,
+                title="P2 正片",
+                source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=2",
+                cover_url="",
+                duration=None,
+            ),
+        ],
+    )
+
+    merged = service_app.video_assets.merge_video_asset_metadata(existing, refreshed)
+
+    assert merged.cover_url == "/media/covers/BV1xx411c7mD.jpg"
+    assert merged.pages[0].cover_url == "https://example.com/p1.jpg"
+    assert merged.pages[1].cover_url == "https://example.com/p2.jpg"
+    assert merged.duration == 120.0
+
+
+def test_probe_video_route_preserves_existing_multi_page_cover_on_force_refresh(monkeypatch) -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+    existing = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV1xx411c7mD",
+            platform="bilibili",
+            title="测试合集",
+            source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+            cover_url="/media/covers/BV1xx411c7mD.jpg",
+            pages=[
+                VideoPageOptionResponse(
+                    page=1,
+                    title="P1 开场",
+                    source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+                    cover_url="https://example.com/p1.jpg",
+                    duration=61.0,
+                ),
+            ],
+        )
+    )
+
+    monkeypatch.setattr(
+        videos_router,
+        "probe_video_asset",
+        lambda url, force_refresh=False: (
+            VideoAssetRecord(
+                canonical_id="BV1xx411c7mD",
+                platform="bilibili",
+                title="测试合集",
+                source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+                cover_url="",
+                pages=[
+                    VideoPageOptionResponse(
+                        page=1,
+                        title="P1 开场",
+                        source_url="https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+                        cover_url="",
+                        duration=None,
+                    ),
+                ],
+            ),
+            [],
+            True,
+        ),
+    )
+
+    request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {"task_repository": repository})()})()})()
+    response = videos_router.probe_video(
+        videos_router.VideoProbeRequest(url="https://www.bilibili.com/video/BV1xx411c7mD", force_refresh=True),
+        request,
+    )
+
+    assert response.video.video_id == existing.video_id
+    assert response.video.cover_url == "/media/covers/BV1xx411c7mD.jpg"
+    assert response.video.pages[0].cover_url == "https://example.com/p1.jpg"
 
 
 def test_probe_video_asset_returns_youtube_single_video(monkeypatch) -> None:

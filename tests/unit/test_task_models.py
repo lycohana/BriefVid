@@ -6,7 +6,12 @@ from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskSt
 from video_sum_core.errors import VideoSumError
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
-from video_sum_infra.config import ServiceSettings, normalize_transcription_provider
+from video_sum_infra.config import (
+    ServiceSettings,
+    normalize_transcription_provider,
+    recommend_mindmap_concurrency,
+    recommend_task_concurrency,
+)
 from video_sum_infra.runtime import default_data_dir
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
 
@@ -76,6 +81,19 @@ def test_service_settings_default_transcription_provider_is_siliconflow() -> Non
     assert settings.transcription_provider == "siliconflow"
 
 
+def test_recommend_task_concurrency_prefers_local_asr_serial_execution() -> None:
+    settings = ServiceSettings(transcription_provider="local", runtime_channel="gpu-cu128", device_preference="cuda")
+
+    assert recommend_task_concurrency(settings, cuda_available=True) == 1
+
+
+def test_recommend_task_concurrency_prefers_cloud_or_gpu_parallel_execution() -> None:
+    settings = ServiceSettings(transcription_provider="siliconflow", runtime_channel="base", device_preference="cpu")
+
+    assert recommend_task_concurrency(settings, cuda_available=False) == 2
+    assert recommend_mindmap_concurrency() == 1
+
+
 def test_settings_manager_preserves_existing_local_provider(tmp_path: Path) -> None:
     base_settings = ServiceSettings(
         data_dir=tmp_path / "data",
@@ -106,6 +124,26 @@ def test_settings_manager_reports_persisted_file_state(tmp_path: Path) -> None:
     manager.save(SettingsUpdatePayload(llm_enabled=True))
 
     assert manager.has_persisted_settings is True
+
+
+def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text('{"transcription_provider":"local","fixed_model":"tiny"}', encoding="utf-8")
+
+    loaded = manager.load()
+    persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
+
+    assert loaded.task_concurrency == 1
+    assert loaded.mindmap_concurrency == 1
+    assert persisted.task_concurrency == 1
+    assert persisted.mindmap_concurrency == 1
 
 
 def test_service_settings_default_to_managed_user_data_dir() -> None:

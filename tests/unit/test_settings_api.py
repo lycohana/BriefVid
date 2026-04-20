@@ -7,17 +7,21 @@ from fastapi import HTTPException
 
 import video_sum_service.app as service_app
 import video_sum_service.runtime_support as runtime_support
+from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 from video_sum_infra.config import ServiceSettings
 from video_sum_service.app import (
     app,
     install_local_asr,
     probe_asr_connection,
     probe_llm_connection,
+    recover_incomplete_tasks,
     serialize_settings,
     settings_manager,
     update_settings,
 )
+from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.settings_manager import SettingsUpdatePayload
+import sqlite3
 
 
 def test_update_settings_reuses_environment_probe(monkeypatch, tmp_path: Path) -> None:
@@ -75,6 +79,8 @@ def test_serialize_settings_includes_persisted_file_flag(monkeypatch, tmp_path: 
     payload = serialize_settings(current, environment_info={"cudaAvailable": False, "runtimeChannel": "base"})
 
     assert payload["settings_file_exists"] is False
+    assert payload["task_concurrency"] == current.task_concurrency
+    assert payload["mindmap_concurrency"] == current.mindmap_concurrency
 
     settings_manager._settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_manager._settings_path.write_text("{}", encoding="utf-8")
@@ -185,6 +191,32 @@ def test_install_local_asr_retries_with_mirror_when_official_index_fails(monkeyp
     assert "--index-url" in commands[1]
     index_flag = commands[1].index("--index-url")
     assert commands[1][index_flag + 1] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
+def test_recover_incomplete_tasks_resubmits_queued_and_running_records() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+    queued = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/queued", title="queued"))
+    running = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/running", title="running"))
+    repository.update_status(running.task_id, TaskStatus.RUNNING)
+    completed = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/completed", title="completed"))
+    repository.update_status(completed.task_id, TaskStatus.COMPLETED)
+
+    class FakeWorker:
+        def __init__(self) -> None:
+            self.submitted: list[str] = []
+
+        def submit(self, record) -> None:
+            self.submitted.append(record.task_id)
+
+    worker = FakeWorker()
+
+    recovered = recover_incomplete_tasks(repository, worker)
+
+    assert recovered == 2
+    assert set(worker.submitted) == {queued.task_id, running.task_id}
 
 
 def test_install_workspace_packages_bootstraps_hatchling_before_local_packages(

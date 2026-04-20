@@ -31,6 +31,7 @@ from video_sum_service.runtime_support import (
     ensure_runtime_pip,
     install_workspace_packages,
     pip_install_with_fallbacks,
+    replace_task_worker,
     run_command,
     serialize_settings,
 )
@@ -44,6 +45,31 @@ probe_video_asset = video_assets.probe_video_asset
 _cleanup_video_files = cleanup_video_files
 
 
+def recover_incomplete_tasks(repository: SqliteTaskRepository, task_worker) -> int:
+    recoverable = sorted(
+        (
+            record
+            for record in repository.list_tasks()
+            if record.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+        ),
+        key=lambda record: (record.created_at, record.task_id),
+    )
+    if not recoverable:
+        return 0
+
+    recovered_count = 0
+    for record in recoverable:
+        if record.status == TaskStatus.RUNNING:
+            logger.warning("recover interrupted running task task_id=%s video_id=%s", record.task_id, record.video_id)
+        else:
+            logger.info("recover queued task task_id=%s video_id=%s", record.task_id, record.video_id)
+        task_worker.submit(record)
+        recovered_count += 1
+
+    logger.info("recovered incomplete tasks count=%d", recovered_count)
+    return recovered_count
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     current_settings = settings_manager.current
@@ -53,13 +79,18 @@ async def lifespan(app: FastAPI):
     repository = SqliteTaskRepository(connection)
     repository.initialize()
     app.state.task_repository = repository
-    app.state.task_worker = build_worker(repository=repository, current_settings=current_settings)
+    task_worker = build_worker(repository=repository, current_settings=current_settings)
+    replace_task_worker(app.state, task_worker)
     app.state.db_connection = connection
     app.state.settings_manager = settings_manager
+    recover_incomplete_tasks(repository, task_worker)
     logger.info("application startup complete database=%s", current_settings.database_url)
     try:
         yield
     finally:
+        task_worker = getattr(app.state, "task_worker", None)
+        if task_worker is not None:
+            task_worker.shutdown(wait=False)
         logger.info("application shutdown")
         connection.close()
 
@@ -169,10 +200,13 @@ def update_settings(payload: SettingsUpdatePayload) -> dict[str, object]:
         clear_environment_probe_cache(previous_settings.runtime_channel)
         clear_environment_probe_cache(current_settings.runtime_channel)
     environment = detect_environment(current_settings.runtime_channel)
-    app.state.task_worker = build_worker(
-        app.state.task_repository,
-        current_settings,
-        environment_info=environment,
+    replace_task_worker(
+        app.state,
+        build_worker(
+            app.state.task_repository,
+            current_settings,
+            environment_info=environment,
+        ),
     )
     return {
         "saved": True,
@@ -209,10 +243,13 @@ def install_local_asr(reinstall: bool = False) -> dict[str, object]:
 
     clear_environment_probe_cache(runtime_channel)
     environment = detect_environment(runtime_channel)
-    app.state.task_worker = build_worker(
-        app.state.task_repository,
-        current_settings,
-        environment_info=environment,
+    replace_task_worker(
+        app.state,
+        build_worker(
+            app.state.task_repository,
+            current_settings,
+            environment_info=environment,
+        ),
     )
     write_runtime_metadata(
         runtime_channel,
