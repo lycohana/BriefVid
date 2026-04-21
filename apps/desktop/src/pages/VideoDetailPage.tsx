@@ -7,20 +7,27 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
 import { api } from "../api";
 import { MarkdownContent } from "../components/MarkdownContent";
+import { MultiPageSelectDialog } from "../components/MultiPageSelectDialog";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import {
+  AGGREGATE_SUMMARY_PAGE_NUMBER,
+  buildVideoPageBatchOptions,
   buildChapterGroups,
   buildKnowledgeCards,
   describeMindMapWorkspace,
   describeTaskContentState,
   describeUserFacingErrorMessage,
+  filterTasksForPage,
+  getTaskPageNumber,
+  isAggregateSummaryTask,
   pickDetailTaskId,
   resolveKnowledgeNoteMarkdown,
+  taskPageLabel,
   type DetailTab,
   type KnowledgeCard,
   type TaskPanelState,
 } from "../detailModel";
-import type { MindMapNode, TaskDetail, TaskEvent, TaskMindMapResponse, TaskStatus, TaskSummary, VideoAssetDetail } from "../types";
+import type { MindMapNode, TaskDetail, TaskEvent, TaskMindMapResponse, TaskStatus, TaskSummary, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse } from "../types";
 import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents, taskStatusLabel } from "../utils";
 import { buildPlayerEmbedDescriptor, withPlayerSeek } from "../videoPlayer";
 
@@ -84,6 +91,7 @@ type MindMapFlowNodeData = {
   selected: boolean;
   muted: boolean;
   timeAnchor?: number | null;
+  pageAnchorLabel?: string;
   sourceChapterTitles: string[];
   sourceChapterStarts: number[];
   accent: MindMapAccent;
@@ -215,17 +223,24 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [activeTab, setActiveTab] = useState<DetailTab>("knowledge");
   const [taskPanelState, setTaskPanelState] = useState<TaskPanelState>("collapsed");
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [actionMenuSection, setActionMenuSection] = useState<"regenerate" | "batch" | "maintenance" | null>(null);
+  const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [mindMaps, setMindMaps] = useState<Record<string, TaskMindMapResponse>>({});
   const [mindMapLoading, setMindMapLoading] = useState<Record<string, boolean>>({});
   const [isExportingKnowledgeCard, setIsExportingKnowledgeCard] = useState(false);
   const [expandedChapterGroupIds, setExpandedChapterGroupIds] = useState<string[]>([]);
   const [selectedPageNumber, setSelectedPageNumber] = useState<number | null>(null);
+  const [jumpConfirmPopover, setJumpConfirmPopover] = useState<{ open: boolean; pageNumber: number; title: string; x: number; y: number } | null>(null);
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchDialogMode, setBatchDialogMode] = useState<"create" | "resummary">("create");
   const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
   const [selectedMindMapNodeId, setSelectedMindMapNodeId] = useState<string | null>(null);
   const lastAutoRefreshEventRef = useRef<string | null>(null);
   const taskPopoverRef = useRef<HTMLDivElement | null>(null);
   const actionMenuRef = useRef<HTMLDivElement | null>(null);
+  const pageSwitcherRef = useRef<HTMLDivElement | null>(null);
+  const batchSideRef = useRef<HTMLDivElement | null>(null);
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const knowledgeExportRef = useRef<HTMLElement | null>(null);
@@ -439,27 +454,58 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     setMindMaps({});
     setMindMapLoading({});
     setSelectedPageNumber(null);
+    setPageMenuOpen(false);
+    setBatchDialogOpen(false);
+    setBatchDialogMode("create");
     setSelectedMindMapNodeId(null);
     void refreshDetail({ preferredTaskId: null }).catch(() => undefined);
   }, [videoId]);
 
   const orderedTasks = useMemo(() => [...tasks].sort(compareTasksByRecent), [tasks]);
   const availablePages = video?.pages ?? [];
+  const aggregateSummaryTasks = useMemo(() => orderedTasks.filter(isAggregateSummaryTask), [orderedTasks]);
   const pageGeneratedMap = useMemo(() => {
     const nextMap = new Map<number, boolean>();
     for (const task of orderedTasks) {
-      const pageNumber = task.page_number ?? 1;
+      if (isAggregateSummaryTask(task)) {
+        continue;
+      }
+      const pageNumber = getTaskPageNumber(task);
       nextMap.set(pageNumber, Boolean(nextMap.get(pageNumber)) || hasGeneratedResult(task));
     }
     return nextMap;
   }, [orderedTasks]);
+  const pageBatchOptions = useMemo<VideoPageBatchOption[]>(() => {
+    return buildVideoPageBatchOptions(availablePages, orderedTasks);
+  }, [availablePages, orderedTasks]);
+  const pageBatchSummary = useMemo(() => {
+    return pageBatchOptions.reduce(
+      (summary, page) => {
+        summary.total += 1;
+        if (page.aggregate_status === "completed") {
+          summary.completed += 1;
+        } else if (page.aggregate_status === "in_progress") {
+          summary.inProgress += 1;
+        } else if (page.aggregate_status === "failed") {
+          summary.failed += 1;
+        } else {
+          summary.notStarted += 1;
+        }
+        return summary;
+      },
+      { total: 0, completed: 0, inProgress: 0, notStarted: 0, failed: 0 },
+    );
+  }, [pageBatchOptions]);
+  const canCreateAggregateSummary = pageBatchOptions.some((page) => page.has_completed_result);
+  const canShowAggregateSummaryOption = availablePages.length > 0 && (aggregateSummaryTasks.length > 0 || canCreateAggregateSummary);
   const effectivePageNumber = selectedPageNumber ?? availablePages[0]?.page ?? null;
+  const isAggregateSummaryView = effectivePageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER;
   const currentPage = availablePages.find((page) => page.page === effectivePageNumber) ?? null;
   const pageTasks = useMemo(() => {
     if (!availablePages.length || effectivePageNumber == null) {
-      return orderedTasks;
+      return orderedTasks.filter((task) => !isAggregateSummaryTask(task));
     }
-    return orderedTasks.filter((task) => (task.page_number ?? 1) === effectivePageNumber);
+    return filterTasksForPage(orderedTasks, effectivePageNumber);
   }, [availablePages.length, effectivePageNumber, orderedTasks]);
   const latestTaskId = pageTasks[0]?.task_id ?? null;
   const latestTaskSummary = pageTasks[0] ?? null;
@@ -490,9 +536,12 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     if (selectedPageNumber && availablePages.some((page) => page.page === selectedPageNumber)) {
       return;
     }
-    const preferredPage = orderedTasks.find((task) => task.page_number != null)?.page_number ?? availablePages[0]?.page ?? null;
+    if (selectedPageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER && canShowAggregateSummaryOption) {
+      return;
+    }
+    const preferredPage = orderedTasks.find((task) => task.page_number != null && task.page_number > 0)?.page_number ?? availablePages[0]?.page ?? null;
     setSelectedPageNumber(preferredPage);
-  }, [availablePages, orderedTasks, selectedPageNumber]);
+  }, [availablePages, canShowAggregateSummaryOption, orderedTasks, selectedPageNumber]);
 
   useEffect(() => {
     const nextSelectedTaskId = pickDetailTaskId(pageTasks, selectedTaskIdRef.current);
@@ -616,7 +665,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   }, [latestEvents, latestTaskId]);
 
   useEffect(() => {
-    if (taskPanelState !== "expanded" && !actionMenuOpen) {
+    if (taskPanelState !== "expanded" && !actionMenuOpen && !pageMenuOpen) {
       return;
     }
 
@@ -624,12 +673,18 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       const target = event.target as Node;
       const clickedTaskPopover = taskPopoverRef.current?.contains(target);
       const clickedActionMenu = actionMenuRef.current?.contains(target);
+      const clickedPageSwitcher = pageSwitcherRef.current?.contains(target);
+      const clickedBatchSide = batchSideRef.current?.contains(target);
 
-      if (!clickedTaskPopover) {
+      if (!clickedTaskPopover && !clickedBatchSide) {
         setTaskPanelState("collapsed");
       }
       if (!clickedActionMenu) {
         setActionMenuOpen(false);
+        setActionMenuSection(null);
+      }
+      if (!clickedPageSwitcher) {
+        setPageMenuOpen(false);
       }
     }
 
@@ -637,6 +692,8 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       if (event.key === "Escape") {
         setTaskPanelState("collapsed");
         setActionMenuOpen(false);
+        setActionMenuSection(null);
+        setPageMenuOpen(false);
       }
     }
 
@@ -646,7 +703,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       document.removeEventListener("mousedown", handlePointerDown);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [actionMenuOpen, taskPanelState]);
+  }, [actionMenuOpen, pageMenuOpen, taskPanelState]);
 
   async function handleCopyKnowledgeCardAsImage() {
     if (!knowledgeExportRef.current || isExportingKnowledgeCard) {
@@ -767,11 +824,17 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
     return describeMindMapWorkspace(selectedTaskDetail, selectedMindMap);
   }, [isSelectedTaskLoading, selectedMindMap, selectedTaskDetail, selectedTaskLoadError]);
-  const knowledgeCards = useMemo(() => buildKnowledgeCards(selectedResult), [selectedResult]);
+  const knowledgeCards = useMemo(
+    () => buildKnowledgeCards(selectedResult, { chapterAnchor: isAggregateSummaryView ? "page" : "time" }),
+    [isAggregateSummaryView, selectedResult],
+  );
   const overviewCard = knowledgeCards.find((item) => item.kind === "overview") ?? null;
   const keyPointCards = knowledgeCards.filter((item) => item.kind === "key-point");
   const chapterCards = knowledgeCards.filter((item) => item.kind === "chapter");
-  const chapterGroups = useMemo(() => buildChapterGroups(chapterCards, selectedResult), [chapterCards, selectedResult]);
+  const chapterGroups = useMemo(
+    () => buildChapterGroups(chapterCards, selectedResult, { chapterAnchor: isAggregateSummaryView ? "page" : "time" }),
+    [chapterCards, isAggregateSummaryView, selectedResult],
+  );
   const areAllChapterGroupsExpanded = chapterGroups.length > 0 && expandedChapterGroupIds.length === chapterGroups.length;
   const selectedKnowledgeNoteMarkdown = useMemo(() => resolveKnowledgeNoteMarkdown(selectedResult), [selectedResult]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
@@ -809,11 +872,20 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
         : "已准备";
   const heroStats: HeroStat[] = [
     { id: "progress", label: "最新运行", value: heroProgressSummary },
-    { id: "content", label: "当前查看", value: currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
+    {
+      id: "content",
+      label: "当前查看",
+      value: isAggregateSummaryView ? "全集总结" : currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务",
+      mono: true,
+    },
   ];
+  const batchCompletionCount = pageBatchSummary.completed;
+  const batchProgressPercent = pageBatchSummary.total > 0
+    ? Math.max(0, Math.min(100, Math.round((batchCompletionCount / pageBatchSummary.total) * 100)))
+    : 0;
   const playerDescriptor = useMemo(
-    () => buildPlayerEmbedDescriptor(currentPage?.source_url || video?.source_url),
-    [currentPage?.source_url, video?.source_url],
+    () => isAggregateSummaryView ? null : buildPlayerEmbedDescriptor(currentPage?.source_url || video?.source_url),
+    [currentPage?.source_url, isAggregateSummaryView, video?.source_url],
   );
   const playerEmbedUrl = useMemo(() => {
     if (!playerDescriptor) {
@@ -823,6 +895,9 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   }, [playerDescriptor, playerSeekTarget]);
   const localPlayerUrl = useMemo(() => {
     if (!video || String(video.platform || "").toLowerCase() !== "local") {
+      return null;
+    }
+    if (isAggregateSummaryView) {
       return null;
     }
     const source = currentPage?.source_url || video.source_url;
@@ -835,7 +910,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       }
     })();
     return LOCAL_VIDEO_SUFFIXES.has(suffix) ? `/api/v1/videos/${video.video_id}/media` : null;
-  }, [currentPage?.source_url, video]);
+  }, [currentPage?.source_url, isAggregateSummaryView, video]);
   const hasSeekablePlayer = Boolean(localPlayerUrl || playerDescriptor);
   const readyMindMap = selectedMindMap?.status === "ready" && selectedTaskDetail?.result?.mindmap_status !== "generating"
     ? selectedMindMap.mindmap ?? null
@@ -880,8 +955,12 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     return readyMindMap.nodes.find((node) => node.id === readyMindMap.root) ?? readyMindMap.nodes[0] ?? null;
   }, [readyMindMap]);
   const mindMapFlow = useMemo(
-    () => (readyMindMapRoot ? buildMindMapFlow(readyMindMapRoot, selectedMindMapNodeId) : { nodes: [], edges: [] }),
-    [readyMindMapRoot, selectedMindMapNodeId],
+    () => (
+      readyMindMapRoot
+        ? buildMindMapFlow(readyMindMapRoot, selectedMindMapNodeId, isAggregateSummaryView ? "page" : "time")
+        : { nodes: [], edges: [] }
+    ),
+    [isAggregateSummaryView, readyMindMapRoot, selectedMindMapNodeId],
   );
   const selectedMindMapNode = useMemo(() => {
     if (!readyMindMapRoot || !selectedMindMapNodeId) {
@@ -934,6 +1013,58 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
+
+  function handleJumpToPageSummary(event: React.MouseEvent, pageNumber: number | null) {
+    if (pageNumber == null) {
+      return;
+    }
+    const page = availablePages.find((item) => item.page === pageNumber);
+    if (!page) {
+      setStatus(`没有找到 P${pageNumber} 对应的分 P。`);
+      return;
+    }
+    // 在点击位置显示确认悬浮窗
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setJumpConfirmPopover({
+      open: true,
+      pageNumber,
+      title: page.title,
+      x: rect.left + rect.width / 2,
+      y: rect.bottom + 8,
+    });
+  }
+
+  function handleConfirmJump() {
+    if (!jumpConfirmPopover) return;
+    setSelectedPageNumber(jumpConfirmPopover.pageNumber);
+    setActiveTab("knowledge");
+    setPageMenuOpen(false);
+    setJumpConfirmPopover(null);
+    setStatus(`已跳转到 P${jumpConfirmPopover.pageNumber}「${jumpConfirmPopover.title}」`);
+  }
+
+  function handleCancelJump() {
+    setJumpConfirmPopover(null);
+  }
+
+  function handleDismissJumpPopover() {
+    setJumpConfirmPopover(null);
+  }
+
+  // 点击页面其他地方关闭悬浮窗
+  useEffect(() => {
+    if (!jumpConfirmPopover?.open) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.jump-confirm-popover') && !target.closest('[data-jump-anchor]')) {
+        setJumpConfirmPopover(null);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [jumpConfirmPopover?.open]);
 
   function handleToggleAllChapterGroups() {
     setExpandedChapterGroupIds(areAllChapterGroupsExpanded ? [] : chapterGroups.map((group) => group.id));
@@ -989,6 +1120,73 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
   }
 
+  async function handleCreateAggregateSummary() {
+    if (!video) {
+      return;
+    }
+    setActionMenuOpen(false);
+    setActionMenuSection(null);
+    setStatus("正在创建全集总结任务...");
+    try {
+      const response = await api.createAggregateSummaryTask(video.video_id);
+      setSelectedPageNumber(AGGREGATE_SUMMARY_PAGE_NUMBER);
+      await refreshDetail({
+        forceTaskIds: [response.task_id],
+        preferredTaskId: response.task_id,
+        syncLibrary: true,
+      });
+      setStatus("已开始生成全集总结");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "全集总结创建失败");
+    }
+  }
+
+  async function handleSubmitBatchAction(input: { pageNumbers: number[]; confirm: boolean }): Promise<VideoTaskBatchResponse> {
+    if (!video) {
+      throw new Error("当前视频信息不可用，请稍后重试。");
+    }
+
+    setStatus(
+      batchDialogMode === "create"
+        ? (input.confirm ? "正在确认批量生成..." : "正在创建批量生成任务...")
+        : (input.confirm ? "正在确认批量重生成..." : "正在准备批量重生成..."),
+    );
+
+    const response = batchDialogMode === "create"
+      ? await api.createVideoTasksBatch(video.video_id, {
+        page_numbers: input.pageNumbers,
+        confirm: input.confirm,
+      })
+      : await api.resummarizeVideoTasksBatch(video.video_id, {
+        page_numbers: input.pageNumbers,
+        confirm: input.confirm,
+      });
+
+    if (response.requires_confirmation) {
+      setStatus(
+        batchDialogMode === "create"
+          ? `所选内容中有 ${response.conflict_pages.length} 个分 P 已有成功摘要，确认后会默认跳过。`
+          : `所选内容中有 ${response.conflict_pages.length} 个分 P 将复用已有转写重新生成摘要，请确认继续。`,
+      );
+      return response;
+    }
+
+    await refreshDetail({ preferredTaskId: null, syncLibrary: true });
+    setBatchDialogOpen(false);
+    const createdCount = response.created_tasks.length;
+    const skippedCount = response.skipped_pages.length;
+    setStatus(
+      batchDialogMode === "create"
+        ? (createdCount > 0
+          ? `已创建 ${createdCount} 个批量任务${skippedCount ? `，跳过 ${skippedCount} 个分 P` : ""}`
+          : `没有创建新任务${skippedCount ? `，已跳过 ${skippedCount} 个分 P` : ""}`)
+        : (createdCount > 0
+          ? `已发起 ${createdCount} 个批量重生成任务${skippedCount ? `，跳过 ${skippedCount} 个分 P` : ""}`
+          : `没有创建新的重生成任务${skippedCount ? `，已跳过 ${skippedCount} 个分 P` : ""}`),
+    );
+    return response;
+  }
+
   if (!video) {
     return <section className="grid-card empty-state-card">正在加载视频详情...</section>;
   }
@@ -1010,6 +1208,36 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   return (
     <section className="video-detail-page">
       <FloatingNoticeStack notices={[{ id: "video-detail-status", message: status }]} />
+
+      {/* 分 P 跳转确认悬浮窗 */}
+      {jumpConfirmPopover?.open && (
+        <div
+          className="jump-confirm-popover"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            left: jumpConfirmPopover.x,
+            top: jumpConfirmPopover.y,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className="jump-confirm-popover-arrow" aria-hidden="true"></div>
+          <div className="jump-confirm-popover-content">
+            <p className="jump-confirm-popover-message">
+              跳转到 P{jumpConfirmPopover.pageNumber}「{jumpConfirmPopover.title}」？
+            </p>
+            <div className="jump-confirm-popover-actions">
+              <button className="jump-confirm-popover-cancel" onClick={handleCancelJump} type="button">
+                取消
+              </button>
+              <button className="jump-confirm-popover-ok" onClick={handleConfirmJump} type="button">
+                跳转
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="detail-page-shell">
         <div className="detail-page-toolbar">
           <Link className="detail-back-button" to="/library">
@@ -1018,60 +1246,114 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
           </Link>
         </div>
 
-        <article className="video-detail-hero">
-          {canOpenLocalSource ? (
-            <button
-              className="video-detail-cover video-detail-cover-button"
-              type="button"
-              onClick={() => void handleOpenLocalSource().catch((error) => {
-                setStatus(error instanceof Error ? error.message : "打开本地视频失败");
-              })}
-            >
-              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
-              <div className="video-detail-cover-overlay">
-                <IconPlayCircle className="video-detail-play-icon" />
+        <article className={`video-detail-hero ${pageBatchSummary.total > 0 ? "has-page-batch" : "is-single-page"}`}>
+          <div className="video-detail-media">
+            {canOpenLocalSource ? (
+              <button
+                className="video-detail-cover video-detail-cover-button"
+                type="button"
+                onClick={() => void handleOpenLocalSource().catch((error) => {
+                  setStatus(error instanceof Error ? error.message : "打开本地视频失败");
+                })}
+              >
+                {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+                <div className="video-detail-cover-overlay">
+                  <IconPlayCircle className="video-detail-play-icon" />
+                </div>
+                <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
+              </button>
+            ) : isLocalVideo ? (
+              <div className="video-detail-cover">
+                {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+                <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
               </div>
-              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
-            </button>
-          ) : isLocalVideo ? (
-            <div className="video-detail-cover">
-              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
-              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
-            </div>
-          ) : (
-            <a className="video-detail-cover" href={heroSourceTarget} target="_blank" rel="noreferrer">
-              {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
-              <div className="video-detail-cover-overlay">
-                <IconPlayCircle className="video-detail-play-icon" />
-              </div>
-              <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
-            </a>
-          )}
+            ) : (
+              <a className="video-detail-cover" href={heroSourceTarget} target="_blank" rel="noreferrer">
+                {(currentPage?.cover_url || video.cover_url) ? <img src={currentPage?.cover_url || video.cover_url} alt={currentPage ? `P${currentPage.page} ${video.title}` : video.title} loading="lazy" /> : <div className="video-detail-cover-placeholder">VIDEO</div>}
+                <div className="video-detail-cover-overlay">
+                  <IconPlayCircle className="video-detail-play-icon" />
+                </div>
+                <div className="detail-duration-badge">{formatDuration(currentPage?.duration ?? video.duration)}</div>
+              </a>
+            )}
+          </div>
 
           <div className="video-detail-copy">
-            <div className="detail-hero-meta-row">
-              <span className={`detail-status-badge ${taskStatusClass(liveStatus)}`}>{taskStatusLabel(liveStatus)}</span>
-              <span className="detail-hero-meta-time">{formatDateTime(video.updated_at)}</span>
-            </div>
-
-            <h2 className="video-detail-title">{video.title}</h2>
-            {availablePages.length ? (
-              <div className="detail-page-switcher">
-                <span className="detail-page-switcher-label">当前分 P</span>
-                <select
-                  className="detail-page-select"
-                  value={effectivePageNumber ?? ""}
-                  onChange={(event) => setSelectedPageNumber(Number(event.target.value) || null)}
-                >
-                  {availablePages.map((page) => (
-                    <option key={page.page} value={page.page}>
-                      {page.title}{pageGeneratedMap.get(page.page) ? " ✓" : ""}
-                    </option>
-                  ))}
-                </select>
+            <div className="video-detail-copy-main">
+              <div className="detail-hero-meta-row">
+                <span className={`detail-status-badge ${taskStatusClass(liveStatus)}`}>{taskStatusLabel(liveStatus)}</span>
+                <span className="detail-hero-meta-time">{formatDateTime(video.updated_at)}</span>
+                {pageBatchSummary.total > 0 ? <span className="detail-hero-meta-time">共 {pageBatchSummary.total} P</span> : null}
               </div>
-            ) : null}
 
+              <h2 className="video-detail-title">{video.title}</h2>
+              {availablePages.length ? (
+                <div className={`detail-page-switcher ${pageMenuOpen ? "is-open" : ""}`} ref={pageSwitcherRef}>
+                  <span className="detail-page-switcher-label">当前内容</span>
+                  <button
+                    className="detail-page-select"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded={pageMenuOpen}
+                    onClick={() => setPageMenuOpen((current) => !current)}
+                  >
+                    <span className="detail-page-select-value">
+                      {isAggregateSummaryView ? "全集总结" : currentPage?.title || "选择分 P"}
+                      {currentPage && pageGeneratedMap.get(currentPage.page) ? <span className="detail-page-select-check">✓</span> : null}
+                      {isAggregateSummaryView && aggregateSummaryTasks.some((task) => task.status === "completed") ? <span className="detail-page-select-check">✓</span> : null}
+                    </span>
+                    <IconChevronDown className="detail-page-select-caret" />
+                  </button>
+                  {pageMenuOpen ? (
+                    <div className="detail-page-menu">
+                      <div className="detail-page-menu-scroll" role="listbox" aria-label="选择当前分 P">
+                        {canShowAggregateSummaryOption ? (
+                          <button
+                            className={`detail-page-option ${isAggregateSummaryView ? "is-selected" : ""}`}
+                            role="option"
+                            aria-selected={isAggregateSummaryView}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPageNumber(AGGREGATE_SUMMARY_PAGE_NUMBER);
+                              setPageMenuOpen(false);
+                            }}
+                          >
+                            <span className={`detail-page-option-check ${isAggregateSummaryView ? "is-selected" : ""}`}>{isAggregateSummaryView ? "✓" : ""}</span>
+                            <span className="detail-page-option-copy">
+                              <strong>全集总结</strong>
+                              {aggregateSummaryTasks.length ? <small>已有 {aggregateSummaryTasks.length} 个版本</small> : <small>可基于已完成分 P 生成</small>}
+                            </span>
+                          </button>
+                        ) : null}
+                        {availablePages.map((page) => {
+                          const selected = page.page === effectivePageNumber;
+                          const generated = pageGeneratedMap.get(page.page);
+                          return (
+                            <button
+                              className={`detail-page-option ${selected ? "is-selected" : ""}`}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              key={page.page}
+                              onClick={() => {
+                                setSelectedPageNumber(page.page);
+                                setPageMenuOpen(false);
+                              }}
+                            >
+                              <span className={`detail-page-option-check ${selected ? "is-selected" : ""}`}>{selected ? "✓" : ""}</span>
+                              <span className="detail-page-option-copy">
+                                <strong>{page.title}</strong>
+                                {generated ? <small>已生成摘要</small> : <small>尚未生成</small>}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <div className="detail-task-float" ref={taskPopoverRef}>
               <div className={`detail-hero-capsule ${taskStatusClass(liveStatus)} ${taskPanelState === "expanded" ? "is-expanded" : ""}`}>
                 <div className="detail-hero-capsule-grid">
@@ -1102,7 +1384,15 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                       className={`detail-action-button secondary detail-action-button-compact detail-action-menu-trigger ${actionMenuOpen ? "is-open" : ""}`}
                       title="更多操作"
                       type="button"
-                      onClick={() => setActionMenuOpen((current) => !current)}
+                      onClick={() => {
+                        setActionMenuOpen((current) => {
+                          const nextOpen = !current;
+                          if (!nextOpen) {
+                            setActionMenuSection(null);
+                          }
+                          return nextOpen;
+                        });
+                      }}
                     >
                       <IconSettings className="detail-action-icon" />
                       <IconChevronDown className="detail-action-caret" />
@@ -1111,87 +1401,171 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                     {actionMenuOpen ? (
                       <div className="detail-action-popover" role="menu" aria-label="视频操作设置">
                         <button
-                          className="detail-action-menu-item"
+                          className={`detail-action-menu-item detail-action-menu-group ${actionMenuSection === "regenerate" ? "is-open" : ""}`}
                           role="menuitem"
                           type="button"
-                          disabled={!canResummarize}
-                          onClick={async () => {
-                            setActionMenuOpen(false);
-                            setStatus("正在基于当前版本重新生成摘要...");
-                            await api.resummarizeVideoTask(video.video_id, {
-                              task_id: selectedTaskIdRef.current,
-                              page_number: effectivePageNumber,
-                            });
-                            await refreshDetail({ preferredTaskId: null, syncLibrary: true });
-                            setStatus("已开始新的摘要生成任务");
-                          }}
+                          onClick={() => setActionMenuSection((current) => current === "regenerate" ? null : "regenerate")}
                         >
                           <span className="detail-action-menu-item-icon" aria-hidden="true">
                             <IconSummaryRefresh className="detail-action-icon" />
                           </span>
                           <span className="detail-action-menu-copy">
-                            <strong>重新生成摘要</strong>
-                            <small>复用当前查看版本的转写与分段，仅重新调用 LLM 生成更完整的摘要结果。</small>
+                            <strong>重新生成</strong>
                           </span>
+                          <IconChevronDown className="detail-action-caret" />
                         </button>
+
+                          <div className={`detail-action-submenu ${actionMenuSection === "regenerate" ? "is-open" : ""}`} role="group" aria-label="重新生成操作" aria-hidden={actionMenuSection !== "regenerate"}>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "regenerate" ? 0 : -1}
+                              disabled={!canResummarize}
+                              onClick={async () => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                setStatus("正在基于当前版本重新生成摘要...");
+                                await api.resummarizeVideoTask(video.video_id, {
+                                  task_id: selectedTaskIdRef.current,
+                                  page_number: effectivePageNumber,
+                                });
+                                await refreshDetail({ preferredTaskId: null, syncLibrary: true });
+                                setStatus("已开始新的摘要生成任务");
+                              }}
+                            >
+                              <IconSummaryRefresh className="detail-action-icon" />
+                              <span>仅重跑摘要</span>
+                            </button>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "regenerate" ? 0 : -1}
+                              disabled={!selectedTaskId || selectedTaskStatus !== "completed" || Boolean(selectedTaskId && mindMapLoading[selectedTaskId])}
+                              onClick={async () => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                await handleGenerateMindMap(true);
+                              }}
+                            >
+                              <IconBrainCircuit className="detail-action-icon" />
+                              <span>重跑思维导图</span>
+                            </button>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "regenerate" ? 0 : -1}
+                              disabled={isAggregateSummaryView}
+                              onClick={async () => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                setStatus("正在重新转写并生成摘要...");
+                                await api.createVideoTask(video.video_id, { page_number: effectivePageNumber });
+                                await refreshDetail({ preferredTaskId: null, syncLibrary: true });
+                                setStatus("已开始新的转写摘要任务");
+                              }}
+                            >
+                              <IconTranscriptRefresh className="detail-action-icon" />
+                              <span>重新转写并生成</span>
+                            </button>
+                          </div>
+
                         <button
-                          className="detail-action-menu-item"
+                          className={`detail-action-menu-item detail-action-menu-group ${actionMenuSection === "batch" ? "is-open" : ""}`}
                           role="menuitem"
                           type="button"
-                          disabled={!selectedTaskId || selectedTaskStatus !== "completed" || Boolean(selectedTaskId && mindMapLoading[selectedTaskId])}
-                          onClick={async () => {
-                            setActionMenuOpen(false);
-                            await handleGenerateMindMap(true);
-                          }}
-                        >
-                          <span className="detail-action-menu-item-icon" aria-hidden="true">
-                            <IconBrainCircuit className="detail-action-icon" />
-                          </span>
-                          <span className="detail-action-menu-copy">
-                            <strong>重新生成思维导图</strong>
-                            <small>基于当前查看版本的摘要与知识笔记，重新调用 LLM 生成新的思维导图。</small>
-                          </span>
-                        </button>
-                        <button
-                          className="detail-action-menu-item"
-                          role="menuitem"
-                          type="button"
-                          onClick={async () => {
-                            setActionMenuOpen(false);
-                            setStatus("正在重新转写并生成摘要...");
-                            await api.createVideoTask(video.video_id, { page_number: effectivePageNumber });
-                            await refreshDetail({ preferredTaskId: null, syncLibrary: true });
-                            setStatus("已开始新的转写摘要任务");
-                          }}
+                          disabled={pageBatchOptions.length === 0}
+                          onClick={() => setActionMenuSection((current) => current === "batch" ? null : "batch")}
                         >
                           <span className="detail-action-menu-item-icon" aria-hidden="true">
                             <IconTranscriptRefresh className="detail-action-icon" />
                           </span>
                           <span className="detail-action-menu-copy">
-                            <strong>重新转写生成摘要</strong>
-                            <small>重新抓取音频、执行转写，再生成一份新的完整摘要任务。</small>
+                            <strong>批量处理</strong>
                           </span>
+                          <IconChevronDown className="detail-action-caret" />
                         </button>
+
+                          <div className={`detail-action-submenu ${actionMenuSection === "batch" ? "is-open" : ""}`} role="group" aria-label="批量处理操作" aria-hidden={actionMenuSection !== "batch"}>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "batch" ? 0 : -1}
+                              onClick={() => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                setBatchDialogMode("create");
+                                setBatchDialogOpen(true);
+                              }}
+                            >
+                              <IconTranscriptRefresh className="detail-action-icon" />
+                              <span>批量生成摘要</span>
+                            </button>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "batch" ? 0 : -1}
+                              onClick={() => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                setBatchDialogMode("resummary");
+                                setBatchDialogOpen(true);
+                              }}
+                            >
+                              <IconSummaryRefresh className="detail-action-icon" />
+                              <span>批量重生成摘要</span>
+                            </button>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "batch" ? 0 : -1}
+                              disabled={!canCreateAggregateSummary}
+                              onClick={() => void handleCreateAggregateSummary()}
+                            >
+                              <IconFileText className="detail-action-icon" />
+                              <span>生成全集总结</span>
+                            </button>
+                          </div>
+
                         <button
-                          className="detail-action-menu-item"
+                          className={`detail-action-menu-item detail-action-menu-group ${actionMenuSection === "maintenance" ? "is-open" : ""}`}
                           role="menuitem"
                           type="button"
-                          onClick={async () => {
-                            setActionMenuOpen(false);
-                            setStatus("正在刷新视频信息...");
-                            await api.probeVideo({ url: video.source_url, force_refresh: true });
-                            await refreshDetail({ preferredTaskId: selectedTaskIdRef.current, syncLibrary: true });
-                            setStatus("视频信息已刷新");
-                          }}
+                          onClick={() => setActionMenuSection((current) => current === "maintenance" ? null : "maintenance")}
                         >
                           <span className="detail-action-menu-item-icon" aria-hidden="true">
                             <IconRefresh className="detail-action-icon" />
                           </span>
                           <span className="detail-action-menu-copy">
-                            <strong>刷新视频信息</strong>
-                            <small>重新拉取源站信息并同步当前视频元数据。</small>
+                            <strong>更多维护</strong>
                           </span>
+                          <IconChevronDown className="detail-action-caret" />
                         </button>
+
+                          <div className={`detail-action-submenu ${actionMenuSection === "maintenance" ? "is-open" : ""}`} role="group" aria-label="维护操作" aria-hidden={actionMenuSection !== "maintenance"}>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "maintenance" ? 0 : -1}
+                              onClick={async () => {
+                                setActionMenuOpen(false);
+                                setActionMenuSection(null);
+                                setStatus("正在刷新视频信息...");
+                                await api.probeVideo({ url: video.source_url, force_refresh: true });
+                                await refreshDetail({ preferredTaskId: selectedTaskIdRef.current, syncLibrary: true });
+                                setStatus("视频信息已刷新");
+                              }}
+                            >
+                              <IconRefresh className="detail-action-icon" />
+                              <span>刷新视频信息</span>
+                            </button>
+                          </div>
                       </div>
                     ) : null}
                   </div>
@@ -1210,16 +1584,6 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                     }}
                   >
                     <IconTrash className="detail-action-icon" />
-                  </button>
-                  <button
-                    aria-expanded={taskPanelState === "expanded"}
-                    aria-label={taskPanelState === "expanded" ? "收起任务详情" : "展开任务详情"}
-                    className={`detail-hero-capsule-toggle ${taskPanelState === "expanded" ? "is-expanded" : ""}`}
-                    type="button"
-                    onClick={() => setTaskPanelState((current) => current === "expanded" ? "collapsed" : "expanded")}
-                  >
-                    {taskPanelState === "expanded" ? "收起" : "展开"}
-                    <IconChevronDown className="detail-task-toggle-icon" />
                   </button>
                 </div>
               </div>
@@ -1356,7 +1720,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                         <span className={`task-status ${taskStatusClass(task.status)}`}>{taskStatusLabel(task.status)}</span>
                                         {isLatestTask ? <span className="helper-chip">最新任务</span> : null}
                                         {isSelected ? <span className="helper-chip status-success">当前查看</span> : null}
-                                        {task.page_number ? <span className="helper-chip">P{task.page_number}</span> : null}
+                                        {taskPageLabel(task) ? <span className="helper-chip">{taskPageLabel(task)}</span> : null}
                                       </div>
                                       <strong>{task.title || video.title}</strong>
                                       <small>{formatDateTime(task.created_at)}</small>
@@ -1474,6 +1838,36 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               ) : null}
             </div>
           </div>
+
+          {pageBatchSummary.total > 0 ? (
+            <div className="detail-batch-side" aria-label="批量任务统计" ref={batchSideRef}>
+              <div className="progress-bar-simple detail-batch-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={batchProgressPercent} aria-label="批量完成进度">
+                <div className="progress-fill-simple success" style={{ width: `${batchProgressPercent}%` }} />
+              </div>
+              <div className="detail-batch-inline-meta">
+                <div className="detail-batch-inline-copy">
+                  <span>{batchCompletionCount} / {pageBatchSummary.total}</span>
+                  <small>
+                    进行中 {pageBatchSummary.inProgress} · 未开始 {pageBatchSummary.notStarted}
+                    {pageBatchSummary.failed ? ` · 失败 ${pageBatchSummary.failed}` : ""}
+                  </small>
+                </div>
+                <button
+                  className="detail-inline-toggle detail-batch-toggle"
+                  type="button"
+                  aria-expanded={taskPanelState === "expanded"}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setTaskPanelState((current) => current === "expanded" ? "collapsed" : "expanded");
+                  }}
+                >
+                  <span>{taskPanelState === "expanded" ? "收起" : "详情"}</span>
+                  <IconChevronDown className="detail-task-toggle-icon" />
+                </button>
+              </div>
+            </div>
+          ) : null}
         </article>
 
         <section className="video-detail-main">
@@ -1655,7 +2049,8 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                       card={card}
                                       index={index}
                                       key={card.id}
-                                      onSeekToTimestamp={hasSeekablePlayer ? handleSeekToChapter : undefined}
+                                      onJumpToPage={isAggregateSummaryView ? handleJumpToPageSummary : undefined}
+                                      onSeekToTimestamp={!isAggregateSummaryView && hasSeekablePlayer ? handleSeekToChapter : undefined}
                                     />
                                   ))}
                                 </div>
@@ -1742,7 +2137,17 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                 <span className="detail-mindmap-inspector-kicker">{formatMindMapNodeType(selectedMindMapNode.type)}</span>
                                 <h4>{sanitizeMindMapLabel(selectedMindMapNode.label, selectedMindMapNode.summary)}</h4>
                               </div>
-                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && hasSeekablePlayer ? (
+                              {isAggregateSummaryView && shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) ? (
+                                <button
+                                  className="detail-mindmap-seek-button"
+                                  type="button"
+                                  data-jump-anchor
+                                  onClick={(event) => handleJumpToPageSummary(event, Math.round(selectedMindMapNode.time_anchor ?? 0))}
+                                >
+                                  <IconArrowRight className="detail-mindmap-seek-icon" />
+                                  查看 P{Math.round(selectedMindMapNode.time_anchor ?? 0)} 总结
+                                </button>
+                              ) : shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && hasSeekablePlayer ? (
                                 <button
                                   className="detail-mindmap-seek-button"
                                   type="button"
@@ -1760,16 +2165,26 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               <div className="detail-mindmap-inspector-tags">
                                 {selectedMindMapNode.source_chapter_titles.slice(0, 3).map((title: string, index: number) => {
                                   const timestamp = selectedMindMapNode.source_chapter_starts[index] ?? null;
-                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && hasSeekablePlayer;
-                                  const label = `${title}${shouldDisplayMindMapTimestamp(timestamp) ? ` · ${formatDuration(timestamp!)}` : ""}`;
+                                  const canJumpToPage = isAggregateSummaryView && shouldDisplayMindMapTimestamp(timestamp);
+                                  const canSeek = !isAggregateSummaryView && shouldDisplayMindMapTimestamp(timestamp) && hasSeekablePlayer;
+                                  const anchorLabel = canJumpToPage
+                                    ? `P${Math.round(timestamp!)}`
+                                    : shouldDisplayMindMapTimestamp(timestamp)
+                                      ? formatDuration(timestamp!)
+                                      : "";
+                                  const label = `${title}${anchorLabel ? ` · ${anchorLabel}` : ""}`;
 
-                                  if (canSeek) {
+                                  if (canJumpToPage || canSeek) {
                                     return (
                                       <button
                                         className="detail-mindmap-inspector-tag is-action"
                                         key={`${title}-${index}`}
                                         type="button"
-                                        onClick={() => handleSeekToChapter(timestamp)}
+                                        onClick={(event) => (
+                                          canJumpToPage
+                                            ? handleJumpToPageSummary(event, Math.round(timestamp!))
+                                            : handleSeekToChapter(timestamp)
+                                        )}
                                       >
                                         {label}
                                       </button>
@@ -1861,6 +2276,15 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               </section>
             ) : null}
 
+            <MultiPageSelectDialog
+              isOpen={batchDialogOpen}
+              mode={batchDialogMode}
+              video={video}
+              pages={pageBatchOptions}
+              onClose={() => setBatchDialogOpen(false)}
+              onSubmit={handleSubmitBatchAction}
+            />
+
             {(activeTab === "summary" || activeTab === "mindmap") && (localPlayerUrl || (playerEmbedUrl && playerDescriptor)) ? (
               <FloatingVideoPlayer
                 embedUrl={playerEmbedUrl}
@@ -1881,39 +2305,54 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
 function KnowledgeCardBlock({
   card,
   index,
+  onJumpToPage,
   onSeekToTimestamp,
 }: {
   card: KnowledgeCard;
   index: number;
+  onJumpToPage?: (event: React.MouseEvent, pageNumber: number | null) => void;
   onSeekToTimestamp?: (seconds: number | null) => void;
 }) {
   if (card.kind === "chapter") {
     const canSeek = typeof card.timestampSeconds === "number" && Boolean(onSeekToTimestamp);
+    const canJumpToPage = typeof card.pageNumber === "number" && Boolean(onJumpToPage);
+    const isActionable = canSeek || canJumpToPage;
     const chapterCardBody = (
       <div className="detail-chapter-node-shell">
         <span className="detail-chapter-node-dot" aria-hidden="true" />
         <div className="detail-chapter-node-meta">
           <div className="detail-chapter-time">
-            <IconClock className="detail-inline-icon" />
-            <span>{card.timestampSeconds != null ? formatDuration(card.timestampSeconds) : "--"}</span>
+            {card.anchorLabel ? <IconFileText className="detail-inline-icon" /> : <IconClock className="detail-inline-icon" />}
+            <span>{card.anchorLabel || (card.timestampSeconds != null ? formatDuration(card.timestampSeconds) : "--")}</span>
           </div>
         </div>
         <div className="detail-chapter-node-copy">
           <h4>{card.title}</h4>
           <MarkdownContent className="detail-card-markdown" compact content={card.content} />
         </div>
-        {canSeek ? (
+        {isActionable ? (
           <div className="detail-card-link">
-            定位片段
+            {canJumpToPage ? "查看分 P 总结" : "定位片段"}
             <IconArrowRight className="detail-inline-icon" />
           </div>
         ) : null}
       </div>
     );
 
-    if (canSeek) {
+    if (isActionable) {
       return (
-        <button className="detail-chapter-node detail-chapter-node-action" type="button" onClick={() => onSeekToTimestamp!(card.timestampSeconds ?? null)}>
+        <button
+          className="detail-chapter-node detail-chapter-node-action"
+          type="button"
+          data-jump-anchor
+          onClick={(event) => {
+            if (canJumpToPage) {
+              onJumpToPage!(event, card.pageNumber ?? null);
+              return;
+            }
+            onSeekToTimestamp!(card.timestampSeconds ?? null);
+          }}
+        >
           {chapterCardBody}
         </button>
       );
@@ -2143,7 +2582,11 @@ function layoutMindMap(root: MindMapNode): MindMapCanvasNode[] {
   }));
 }
 
-function buildMindMapFlow(root: MindMapNode, selectedNodeId: string | null): { nodes: FlowNode<MindMapFlowNodeData>[]; edges: Edge[] } {
+function buildMindMapFlow(
+  root: MindMapNode,
+  selectedNodeId: string | null,
+  anchorMode: "time" | "page" = "time",
+): { nodes: FlowNode<MindMapFlowNodeData>[]; edges: Edge[] } {
   const positioned = layoutMindMap(root);
   const focusIds = getMindMapFocusIds(positioned, selectedNodeId);
   const hasFocus = Boolean(focusIds?.size);
@@ -2173,6 +2616,9 @@ function buildMindMapFlow(root: MindMapNode, selectedNodeId: string | null): { n
         selected,
         muted,
         timeAnchor: item.node.time_anchor ?? null,
+        pageAnchorLabel: anchorMode === "page" && shouldDisplayMindMapTimestamp(item.node.time_anchor)
+          ? `P${Math.round(item.node.time_anchor ?? 0)}`
+          : undefined,
         sourceChapterTitles: item.node.source_chapter_titles,
         sourceChapterStarts: item.node.source_chapter_starts,
         accent: item.accent,
@@ -2249,7 +2695,11 @@ function MindMapFlowNode({ data }: NodeProps<FlowNode<MindMapFlowNodeData>>) {
       )}
       <div className="detail-mindmap-node-head">
         <MarkdownContent className="detail-mindmap-node-label" compact content={displayLabel} />
-        {shouldDisplayMindMapTimestamp(data.timeAnchor) ? <small>{formatDuration(data.timeAnchor)}</small> : null}
+        {data.pageAnchorLabel ? (
+          <small>{data.pageAnchorLabel}</small>
+        ) : shouldDisplayMindMapTimestamp(data.timeAnchor) ? (
+          <small>{formatDuration(data.timeAnchor)}</small>
+        ) : null}
       </div>
     </div>
   );

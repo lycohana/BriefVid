@@ -12,10 +12,12 @@ import {
   getConfigHealth,
   isUpdateUnsupported,
   normalizeDevicePreference,
+  taskStatusClass,
 } from "../appModel";
 import { api } from "../api";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
-import type { EnvironmentInfo, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview } from "../types";
+import type { EnvironmentInfo, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview, TaskSummary } from "../types";
+import { formatDateTime, taskStatusLabel } from "../utils";
 import { settingsCategories, type SettingsCategory } from "./settingsConfig";
 
 function SiliconFlowApiKeyHelp() {
@@ -65,6 +67,8 @@ type SettingsPageProps = {
   onOpenUpdateDialog(): void;
 };
 
+const TASK_LIST_LIMIT = 60;
+
 function formatStorageSize(sizeBytes: number) {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return "0 B";
@@ -77,6 +81,14 @@ function formatStorageSize(sizeBytes: number) {
 
 function formatStorageCount(value: number, noun: string) {
   return `${new Intl.NumberFormat("zh-CN").format(Math.max(0, value))} ${noun}`;
+}
+
+function parseMinOneInt(value: string, fallback: number) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, parsed);
 }
 
 export function SettingsPage({
@@ -122,6 +134,10 @@ export function SettingsPage({
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("overview");
   const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
   const [activeFocusTarget, setActiveFocusTarget] = useState<string | null>(null);
+  const [taskListOpen, setTaskListOpen] = useState(false);
+  const [taskListLoading, setTaskListLoading] = useState(false);
+  const [taskListError, setTaskListError] = useState("");
+  const [taskList, setTaskList] = useState<TaskSummary[]>([]);
   const focusTargetRefs = useRef<Record<string, HTMLElement | null>>({});
   const lastHandledExternalFocusNonce = useRef<number | null>(null);
 
@@ -250,6 +266,19 @@ export function SettingsPage({
     }
   }
 
+  async function refreshTaskList() {
+    try {
+      setTaskListLoading(true);
+      setTaskListError("");
+      const tasks = await api.listTasks();
+      setTaskList(tasks.slice(0, TASK_LIST_LIMIT));
+    } catch (error) {
+      setTaskListError(error instanceof Error ? error.message : "读取任务列表失败");
+    } finally {
+      setTaskListLoading(false);
+    }
+  }
+
   const backendRunning = Boolean(desktop.backend?.running);
   const backendReady = Boolean(desktop.backend?.ready);
   const serviceOnline = snapshot.serviceOnline;
@@ -356,9 +385,22 @@ export function SettingsPage({
     return () => window.clearTimeout(timer);
   }, [activeFocusTarget]);
 
+  useEffect(() => {
+    if (!taskListOpen) {
+      return;
+    }
+    void refreshTaskList();
+  }, [taskListOpen]);
+
   if (!form) return <section className="grid-card empty-state-card">正在加载设置...</section>;
 
   const usesSiliconFlowAsr = form.transcription_provider === "siliconflow";
+  const recommendedTaskConcurrency = form.transcription_provider === "local" ? 1 : 2;
+  const performanceRecommendation = recommendedTaskConcurrency === 1
+    ? "当前建议：本地 ASR / CPU 场景任务并发数设为 1，导图并发数设为 1。"
+    : "当前建议：云 ASR 或 GPU 场景任务并发数设为 2，导图并发数设为 1。";
+  const queuedTaskCount = taskList.filter((task) => task.status === "queued").length;
+  const runningTaskCount = taskList.filter((task) => task.status === "running").length;
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
   const storageDirectoryMap = new Map((storageOverview?.directories || []).map((entry) => [entry.key, entry]));
   const cacheDirectory = storageDirectoryMap.get("cache") || null;
@@ -1234,24 +1276,60 @@ export function SettingsPage({
                 </label>
                 <label className="settings-input-group">
                   <span className="settings-input-label">分块目标字符数</span>
-                  <input className="settings-input-field" type="number" value={form.summary_chunk_target_chars} onChange={(e) => updateForm({ ...form, summary_chunk_target_chars: parseInt(e.target.value) || 2200 })} />
+                  <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_target_chars} onChange={(e) => updateForm({ ...form, summary_chunk_target_chars: parseMinOneInt(e.target.value, 2200) })} />
                   <span className="settings-input-caption">LLM 处理时分块的目标字符数</span>
                 </label>
                 <label className="settings-input-group">
                   <span className="settings-input-label">分块重叠段数</span>
-                  <input className="settings-input-field" type="number" value={form.summary_chunk_overlap_segments} onChange={(e) => updateForm({ ...form, summary_chunk_overlap_segments: parseInt(e.target.value) || 2 })} />
+                  <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_overlap_segments} onChange={(e) => updateForm({ ...form, summary_chunk_overlap_segments: parseMinOneInt(e.target.value, 2) })} />
                   <span className="settings-input-caption">分块之间的重叠段数，保证连续性</span>
                 </label>
                 <label className="settings-input-group">
-                  <span className="settings-input-label">并发数</span>
-                  <input className="settings-input-field" type="number" value={form.summary_chunk_concurrency} onChange={(e) => updateForm({ ...form, summary_chunk_concurrency: parseInt(e.target.value) || 2 })} />
-                  <span className="settings-input-caption">同时处理的分块数量</span>
-                </label>
-                <label className="settings-input-group">
                   <span className="settings-input-label">重试次数</span>
-                  <input className="settings-input-field" type="number" value={form.summary_chunk_retry_count} onChange={(e) => updateForm({ ...form, summary_chunk_retry_count: parseInt(e.target.value) || 2 })} />
+                  <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_retry_count} onChange={(e) => updateForm({ ...form, summary_chunk_retry_count: parseMinOneInt(e.target.value, 2) })} />
                   <span className="settings-input-caption">API 调用失败时的重试次数</span>
                 </label>
+              </div>
+            </section>
+          )}
+
+          {activeCategory === "performance" && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2>性能调优</h2>
+                <p>控制任务级并发与单任务内部分块并发，减少本地资源争抢和云端限流压力。</p>
+              </header>
+              <div className="settings-form-group">
+                <label className="settings-input-group">
+                  <span className="settings-input-label">任务并发数</span>
+                  <input className="settings-input-field" type="number" min={1} value={form.task_concurrency} onChange={(e) => updateForm({ ...form, task_concurrency: parseMinOneInt(e.target.value, recommendedTaskConcurrency) })} />
+                  <span className="settings-input-caption">影响下载、转写、摘要的整体链路吞吐；云 API 可能存在并发限流，建议按当前环境推荐值设置。</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">导图并发数</span>
+                  <input className="settings-input-field" type="number" min={1} value={form.mindmap_concurrency} onChange={(e) => updateForm({ ...form, mindmap_concurrency: parseMinOneInt(e.target.value, 1) })} />
+                  <span className="settings-input-caption">影响摘要完成后的导图生成吞吐，不会占用摘要任务的并发槽位；建议保持 1。</span>
+                </label>
+                <label className="settings-input-group">
+                  <span className="settings-input-label">摘要分块并发数</span>
+                  <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_concurrency} onChange={(e) => updateForm({ ...form, summary_chunk_concurrency: parseMinOneInt(e.target.value, 2) })} />
+                  <span className="settings-input-caption">仅控制单个摘要任务内部同时请求的分块数量，不等同于任务并发数。</span>
+                </label>
+              </div>
+              <div className="settings-form-group">
+                <div className="settings-input-group">
+                  <span className="settings-input-label">当前建议</span>
+                  <span className="settings-input-caption">{performanceRecommendation}</span>
+                </div>
+                <div className="settings-input-group settings-performance-tasklist-entry">
+                  <span className="settings-input-label">当前任务队列</span>
+                  <div className="settings-inline-actions">
+                    <button className="secondary-button" type="button" onClick={() => setTaskListOpen(true)}>
+                      查看 tasklist
+                    </button>
+                    <span className="settings-input-caption">使用悬浮窗快速查看最近任务，避免占用主要设置区域。</span>
+                  </div>
+                </div>
               </div>
             </section>
           )}
@@ -1708,6 +1786,58 @@ export function SettingsPage({
           )}
         </div>
       </main>
+      {taskListOpen ? (
+        <div className="settings-tasklist-float" role="dialog" aria-modal="false" aria-label="最近任务列表" onClick={() => setTaskListOpen(false)}>
+          <div className="settings-tasklist-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-tasklist-header">
+              <div className="settings-tasklist-copy">
+                <span className="settings-nav-brand-kicker">Tasklist</span>
+                <strong>最近任务队列</strong>
+                <span>聚焦最近 {TASK_LIST_LIMIT} 条任务，方便确认 `queued` 与 `running` 的分布。</span>
+              </div>
+              <div className="settings-tasklist-actions">
+                <button className="secondary-button" type="button" disabled={taskListLoading} onClick={() => void refreshTaskList()}>
+                  {taskListLoading ? "刷新中..." : "刷新"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => setTaskListOpen(false)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="settings-tasklist-summary">
+              <span className="helper-chip">最近 {taskList.length} 条</span>
+              <span className={`helper-chip ${runningTaskCount ? "status-running" : "status-pending"}`}>运行中 {runningTaskCount}</span>
+              <span className={`helper-chip ${queuedTaskCount ? "status-pending" : "status-success"}`}>排队中 {queuedTaskCount}</span>
+            </div>
+            {taskListError ? <div className="detail-error-banner" role="status">{taskListError}</div> : null}
+            <div className="settings-tasklist-body">
+              {taskListLoading && !taskList.length ? <div className="empty-placeholder">正在同步最近任务...</div> : null}
+              {!taskListLoading && !taskList.length && !taskListError ? <div className="empty-placeholder">当前还没有任务记录。</div> : null}
+              {taskList.map((task) => (
+                <article key={task.task_id} className="settings-tasklist-item">
+                  <div className="settings-tasklist-item-top">
+                    <div className="settings-tasklist-item-meta">
+                      <span className={`task-status ${taskStatusClass(task.status)}`}>{taskStatusLabel(task.status)}</span>
+                      {task.page_number === 0 ? (
+                        <span className="helper-chip">{task.page_title || "全集总结"}</span>
+                      ) : task.page_number ? (
+                        <span className="helper-chip">P{task.page_number}</span>
+                      ) : null}
+                      <span className="helper-chip">{task.input_type}</span>
+                    </div>
+                    <span className="task-history-id">{task.task_id.slice(0, 8)}</span>
+                  </div>
+                  <strong>{task.title || "未命名任务"}</strong>
+                  <div className="settings-tasklist-item-subline">
+                    <span>{formatDateTime(task.created_at)}</span>
+                    {task.task_duration_seconds != null ? <span>耗时 {Math.max(0, Math.round(task.task_duration_seconds))} 秒</span> : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

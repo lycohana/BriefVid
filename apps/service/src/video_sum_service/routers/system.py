@@ -21,6 +21,7 @@ from video_sum_service.runtime_support import (
     detect_environment,
     install_cuda_support,
     install_local_asr,
+    replace_task_worker,
     serialize_settings,
 )
 from video_sum_service.settings_manager import SettingsUpdatePayload
@@ -141,10 +142,13 @@ def update_settings(payload: SettingsUpdatePayload, request: Request) -> dict[st
         clear_environment_probe_cache(previous_settings.runtime_channel)
         clear_environment_probe_cache(current_settings.runtime_channel)
     environment = detect_environment(current_settings.runtime_channel)
-    request.app.state.task_worker = build_worker(
-        request.app.state.task_repository,
-        current_settings,
-        environment_info=environment,
+    replace_task_worker(
+        request.app.state,
+        build_worker(
+            request.app.state.task_repository,
+            current_settings,
+            environment_info=environment,
+        ),
     )
     return {
         "saved": True,
@@ -182,8 +186,11 @@ def get_system_logs(lines: int = 200) -> dict[str, object]:
 
 
 @router.post("/system/shutdown")
-def shutdown_service() -> dict[str, object]:
+def shutdown_service(request: Request) -> dict[str, object]:
     def shutdown() -> None:
+        task_worker = getattr(request.app.state, "task_worker", None)
+        if task_worker is not None:
+            task_worker.shutdown(wait=False)
         os._exit(0)
 
     threading.Timer(0.5, shutdown).start()
@@ -194,7 +201,7 @@ def shutdown_service() -> dict[str, object]:
 def post_cuda_install(payload: dict[str, object], request: Request) -> dict[str, object]:
     requested_variant = payload.get("cuda_variant", payload.get("cudaVariant", "cu128"))
     result, worker = install_cuda_support(str(requested_variant), request.app.state.task_repository)
-    request.app.state.task_worker = worker
+    replace_task_worker(request.app.state, worker)
     return result
 
 
@@ -202,5 +209,5 @@ def post_cuda_install(payload: dict[str, object], request: Request) -> dict[str,
 def post_local_asr_install(request: Request, payload: dict[str, object] | None = None) -> dict[str, object]:
     reinstall = bool((payload or {}).get("reinstall"))
     result, worker = install_local_asr(reinstall=reinstall, repository=request.app.state.task_repository)
-    request.app.state.task_worker = worker
+    replace_task_worker(request.app.state, worker)
     return result

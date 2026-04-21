@@ -1,4 +1,4 @@
-import type { TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem } from "./types";
+import type { PageAggregateStatus, TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem, VideoPageBatchOption, VideoPageOption } from "./types";
 
 export type DetailTab = "knowledge" | "summary" | "mindmap";
 export type TaskPanelState = "collapsed" | "expanded";
@@ -12,6 +12,8 @@ export type KnowledgeCard = {
   content: string;
   meta?: string;
   timestampSeconds?: number | null;
+  pageNumber?: number | null;
+  anchorLabel?: string;
 };
 
 export type ChapterGroup = {
@@ -34,6 +36,64 @@ export type MindMapWorkspaceState = {
   description: string;
   actionLabel?: string;
   actionEnabled?: boolean;
+};
+
+export const AGGREGATE_SUMMARY_PAGE_NUMBER = 0;
+
+export function getTaskPageNumber(task: Pick<TaskSummary, "page_number">): number {
+  return task.page_number ?? 1;
+}
+
+export function isAggregateSummaryTask(task: Pick<TaskSummary, "page_number">): boolean {
+  return task.page_number === AGGREGATE_SUMMARY_PAGE_NUMBER;
+}
+
+export function taskPageLabel(task: Pick<TaskSummary, "page_number" | "page_title">): string {
+  if (isAggregateSummaryTask(task)) {
+    return task.page_title || "全集总结";
+  }
+  return task.page_number ? `P${task.page_number}` : "";
+}
+
+export function derivePageAggregateStatus(tasks: TaskSummary[]): PageAggregateStatus {
+  if (tasks.some((task) => task.status === "running" || task.status === "queued")) {
+    return "in_progress";
+  }
+  if (tasks.some((task) => task.status === "completed")) {
+    return "completed";
+  }
+  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled")) {
+    return "failed";
+  }
+  return "not_started";
+}
+
+export function buildVideoPageBatchOptions(pages: VideoPageOption[], tasks: TaskSummary[]): VideoPageBatchOption[] {
+  return pages.map((page) => {
+    const tasksForPage = tasks.filter((task) => !isAggregateSummaryTask(task) && getTaskPageNumber(task) === page.page);
+    const latestTask = tasksForPage[0] ?? null;
+    return {
+      ...page,
+      aggregate_status: derivePageAggregateStatus(tasksForPage),
+      latest_task_status: latestTask?.status ?? null,
+      latest_task_updated_at: latestTask?.updated_at ?? null,
+      has_completed_result: tasksForPage.some((task) => task.status === "completed"),
+    };
+  });
+}
+
+export function filterTasksForPage(tasks: TaskSummary[], pageNumber: number | null): TaskSummary[] {
+  if (pageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER) {
+    return tasks.filter(isAggregateSummaryTask);
+  }
+  if (pageNumber == null) {
+    return tasks.filter((task) => !isAggregateSummaryTask(task));
+  }
+  return tasks.filter((task) => !isAggregateSummaryTask(task) && getTaskPageNumber(task) === pageNumber);
+}
+
+export type KnowledgeBuildOptions = {
+  chapterAnchor?: "time" | "page";
 };
 
 export function describeUserFacingErrorMessage(rawMessage?: string | null): string {
@@ -89,7 +149,7 @@ export function pickDetailTaskId(tasks: TaskSummary[], preferredTaskId?: string 
   return latestCompleted?.task_id ?? tasks[0]?.task_id ?? null;
 }
 
-export function buildKnowledgeCards(result?: TaskResult | null): KnowledgeCard[] {
+export function buildKnowledgeCards(result?: TaskResult | null, options: KnowledgeBuildOptions = {}): KnowledgeCard[] {
   if (!result) {
     return [];
   }
@@ -129,13 +189,19 @@ export function buildKnowledgeCards(result?: TaskResult | null): KnowledgeCard[]
     timeline.forEach((item, index) => {
       const title = resolveContentTitle(String(item.title || "").trim(), [], String(item.summary || "").trim(), `章节 ${index + 1}`);
       const content = String(item.summary || "").trim();
+      const anchorNumber = typeof item.start === "number" ? item.start : null;
+      const pageNumber = options.chapterAnchor === "page" && anchorNumber != null
+        ? Math.max(1, Math.round(anchorNumber))
+        : null;
       cards.push({
         id: `chapter-${index}`,
         kind: "chapter",
         eyebrow: "Chapter",
         title,
         content: content || "当前章节暂未生成摘要。",
-        timestampSeconds: typeof item.start === "number" ? item.start : null,
+        timestampSeconds: options.chapterAnchor === "page" ? null : anchorNumber,
+        pageNumber,
+        anchorLabel: pageNumber != null ? `P${pageNumber}` : undefined,
       });
     });
   } else {
@@ -156,7 +222,11 @@ export function buildKnowledgeCards(result?: TaskResult | null): KnowledgeCard[]
   return cards;
 }
 
-export function buildChapterGroups(cards: KnowledgeCard[], result?: TaskResult | null): ChapterGroup[] {
+export function buildChapterGroups(
+  cards: KnowledgeCard[],
+  result?: TaskResult | null,
+  options: KnowledgeBuildOptions = {},
+): ChapterGroup[] {
   const backendGroups = Array.isArray(result?.chapter_groups) ? result?.chapter_groups : [];
   if (backendGroups.length) {
     const groups: ChapterGroup[] = [];
@@ -166,7 +236,7 @@ export function buildChapterGroups(cards: KnowledgeCard[], result?: TaskResult |
       }
       const children = Array.isArray(group.children) ? group.children : [];
       const items = children
-        .map((item, childIndex) => buildChapterCardFromTimelineItem(item, `${groupIndex}-${childIndex}`))
+        .map((item, childIndex) => buildChapterCardFromTimelineItem(item, `${groupIndex}-${childIndex}`, options))
         .filter((item): item is KnowledgeCard => Boolean(item));
 
       if (!items.length) {
@@ -175,13 +245,15 @@ export function buildChapterGroups(cards: KnowledgeCard[], result?: TaskResult |
 
       const title = resolveContentTitle(String(group.title || "").trim(), items.map((item) => item.title), String(group.summary || "").trim(), "主题");
       const explicitMeta = String(group.summary || "").trim();
-      const timeRange = [
-        formatOptionalMarkdownDuration(typeof group.start === "number" ? group.start : items[0]?.timestampSeconds),
-        formatOptionalMarkdownDuration(items[items.length - 1]?.timestampSeconds),
-      ]
-        .filter(Boolean)
-        .join(" - ");
-      const meta = explicitMeta || [timeRange, `${items.length} 个小章节`].filter(Boolean).join(" · ");
+      const anchorRange = options.chapterAnchor === "page"
+        ? formatPageAnchorRange(items)
+        : [
+          formatOptionalMarkdownDuration(typeof group.start === "number" ? group.start : items[0]?.timestampSeconds),
+          formatOptionalMarkdownDuration(items[items.length - 1]?.timestampSeconds),
+        ]
+          .filter(Boolean)
+          .join(" - ");
+      const meta = explicitMeta || [anchorRange, `${items.length} 个小章节`].filter(Boolean).join(" · ");
 
       groups.push({
         id: `chapter-group-${groupIndex}`,
@@ -209,10 +281,12 @@ export function buildChapterGroups(cards: KnowledgeCard[], result?: TaskResult |
     const first = items[0];
     const last = items[items.length - 1];
     const title = resolveContentTitle("", items.map((item) => item.title), items.map((item) => item.title).join("；"), "主题");
-    const timeRange = [formatOptionalMarkdownDuration(first.timestampSeconds), formatOptionalMarkdownDuration(last.timestampSeconds)]
-      .filter(Boolean)
-      .join(" - ");
-    const meta = [timeRange, `${items.length} 个小章节`].filter(Boolean).join(" · ");
+    const anchorRange = options.chapterAnchor === "page"
+      ? formatPageAnchorRange(items)
+      : [formatOptionalMarkdownDuration(first.timestampSeconds), formatOptionalMarkdownDuration(last.timestampSeconds)]
+        .filter(Boolean)
+        .join(" - ");
+    const meta = [anchorRange, `${items.length} 个小章节`].filter(Boolean).join(" · ");
 
     groups.push({
       id: `chapter-group-${groups.length}`,
@@ -225,7 +299,11 @@ export function buildChapterGroups(cards: KnowledgeCard[], result?: TaskResult |
   return groups;
 }
 
-function buildChapterCardFromTimelineItem(item: TimelineItem, idSuffix: string): KnowledgeCard | null {
+function buildChapterCardFromTimelineItem(
+  item: TimelineItem,
+  idSuffix: string,
+  options: KnowledgeBuildOptions = {},
+): KnowledgeCard | null {
   if (!item || typeof item !== "object") {
     return null;
   }
@@ -235,14 +313,32 @@ function buildChapterCardFromTimelineItem(item: TimelineItem, idSuffix: string):
   if (!title && !content) {
     return null;
   }
+  const anchorNumber = typeof item.start === "number" ? item.start : null;
+  const pageNumber = options.chapterAnchor === "page" && anchorNumber != null
+    ? Math.max(1, Math.round(anchorNumber))
+    : null;
   return {
     id: `chapter-${idSuffix}`,
     kind: "chapter",
     eyebrow: "Chapter",
     title: title || "章节",
     content: content || "当前章节暂未生成摘要。",
-    timestampSeconds: typeof item.start === "number" ? item.start : null,
+    timestampSeconds: options.chapterAnchor === "page" ? null : anchorNumber,
+    pageNumber,
+    anchorLabel: pageNumber != null ? `P${pageNumber}` : undefined,
   };
+}
+
+function formatPageAnchorRange(items: KnowledgeCard[]) {
+  const pageNumbers = items
+    .map((item) => item.pageNumber)
+    .filter((item): item is number => typeof item === "number" && Number.isFinite(item));
+  if (!pageNumbers.length) {
+    return "";
+  }
+  const first = Math.min(...pageNumbers);
+  const last = Math.max(...pageNumbers);
+  return first === last ? `P${first}` : `P${first} - P${last}`;
 }
 
 function resolveContentTitle(title: string, childTitles: string[], fallbackText: string, prefix: string) {

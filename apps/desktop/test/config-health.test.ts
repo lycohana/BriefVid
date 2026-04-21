@@ -46,6 +46,8 @@ function createSettings(overrides: Partial<ServiceSettings> = {}): ServiceSettin
     summary_user_prompt_template: "",
     summary_chunk_target_chars: 2200,
     summary_chunk_overlap_segments: 2,
+    task_concurrency: 2,
+    mindmap_concurrency: 1,
     summary_chunk_concurrency: 2,
     summary_chunk_retry_count: 2,
     settings_file_exists: true,

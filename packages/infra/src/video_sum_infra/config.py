@@ -220,6 +220,34 @@ def normalize_transcription_provider(value: str | None, default: str = "siliconf
     return TRANSCRIPTION_PROVIDER_ALIASES.get(normalized, default)
 
 
+def recommend_task_concurrency(settings: "ServiceSettings", *, cuda_available: bool | None = None) -> int:
+    provider = normalize_transcription_provider(settings.transcription_provider)
+    if provider == "local":
+        return 1
+    if cuda_available is True:
+        return 2
+
+    runtime_channel = str(settings.runtime_channel or "").strip().lower()
+    if runtime_channel.startswith("gpu-"):
+        return 2
+
+    device_preference = normalize_device_preference(settings.device_preference)
+    if device_preference == "cuda":
+        return 2
+
+    whisper_device = str(settings.whisper_device or "").strip().lower()
+    if whisper_device == "cuda":
+        return 2
+
+    if provider == "siliconflow":
+        return 2
+    return 1
+
+
+def recommend_mindmap_concurrency() -> int:
+    return 1
+
+
 class ServiceSettings(BaseSettings):
     host: str = Field(default_factory=default_host)
     port: int = 3838
@@ -257,6 +285,8 @@ class ServiceSettings(BaseSettings):
     mindmap_user_prompt_template: str = DEFAULT_MINDMAP_USER_PROMPT_TEMPLATE
     summary_chunk_target_chars: int = 2200
     summary_chunk_overlap_segments: int = 2
+    task_concurrency: int = 2
+    mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
     summary_chunk_retry_count: int = 2
 
@@ -275,6 +305,12 @@ class ServiceSettings(BaseSettings):
     @classmethod
     def _normalize_transcription_provider(cls, value: str | None) -> str:
         return normalize_transcription_provider(value)
+
+    @field_validator("summary_chunk_overlap_segments", "task_concurrency", "mindmap_concurrency", "summary_chunk_concurrency", "summary_chunk_retry_count", mode="before")
+    @classmethod
+    def _coerce_positive_int(cls, value: int | str | None) -> int:
+        parsed = int(value or 1)
+        return max(1, parsed)
 
     def resolve_whisper_runtime(
         self,

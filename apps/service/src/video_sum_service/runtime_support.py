@@ -489,7 +489,17 @@ def build_worker(
         repository=repository,
         pipeline_runner=RealPipelineRunner(pipeline_settings),
         auto_generate_mindmap=current_settings.auto_generate_mindmap,
+        task_concurrency=current_settings.task_concurrency,
+        mindmap_concurrency=current_settings.mindmap_concurrency,
     )
+
+
+def replace_task_worker(app_state, next_worker: TaskWorker) -> TaskWorker:
+    previous_worker = getattr(app_state, "task_worker", None)
+    app_state.task_worker = next_worker
+    if isinstance(previous_worker, TaskWorker):
+        previous_worker.close_for_new_work()
+    return next_worker
 
 
 def serialize_settings(
@@ -535,6 +545,8 @@ def serialize_settings(
         "summary_user_prompt_template": current_settings.summary_user_prompt_template,
         "summary_chunk_target_chars": current_settings.summary_chunk_target_chars,
         "summary_chunk_overlap_segments": current_settings.summary_chunk_overlap_segments,
+        "task_concurrency": current_settings.task_concurrency,
+        "mindmap_concurrency": current_settings.mindmap_concurrency,
         "summary_chunk_concurrency": current_settings.summary_chunk_concurrency,
         "summary_chunk_retry_count": current_settings.summary_chunk_retry_count,
         "settings_file_exists": settings_manager.has_persisted_settings,

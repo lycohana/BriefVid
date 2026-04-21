@@ -284,15 +284,24 @@ class RealPipelineRunner(PipelineRunner):
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
         task_dir = ensure_directory(self._settings.tasks_dir / context.task_id)
-        title, transcript, segments = self._parse_transcript_payload(context.task_input.source, context.task_input.title)
-        emit("preparing", 12, "正在复用已有转写内容", {"segment_count": len(segments)})
+        title, transcript, segments, source_kind = self._parse_transcript_payload(
+            context.task_input.source,
+            context.task_input.title,
+        )
+        is_aggregate_series = source_kind == "aggregate_series"
+        emit(
+            "preparing",
+            12,
+            "正在整理全集摘要素材" if is_aggregate_series else "正在复用已有转写内容",
+            {"segment_count": len(segments), "source_kind": source_kind or "transcript"},
+        )
         emit(
             "transcribing",
             32,
-            "已跳过重新转写，直接复用当前版本文本",
+            "已跳过重新转写，直接复用分 P 摘要素材" if is_aggregate_series else "已跳过重新转写，直接复用当前版本文本",
             {"transcript_chars": len(transcript), "segment_count": len(segments)},
         )
-        summary = self._summarize(transcript, segments, title, emit)
+        summary = self._summarize(transcript, segments, title, emit, source_kind=source_kind)
         emit("exporting", 97, "正在导出新的摘要结果")
         result = self._export_result(task_dir, title, transcript, segments, summary)
         emit("exporting", 99, "新的摘要结果已写入本地目录")
@@ -425,7 +434,7 @@ class RealPipelineRunner(PipelineRunner):
         self,
         source: str,
         title_hint: str | None,
-    ) -> tuple[str, str, list[dict[str, object]]]:
+    ) -> tuple[str, str, list[dict[str, object]], str | None]:
         try:
             payload = json.loads(source)
         except json.JSONDecodeError as exc:
@@ -444,7 +453,8 @@ class RealPipelineRunner(PipelineRunner):
             raise VideoSumError("Transcript task payload is missing valid segments.")
 
         title = str(payload.get("title") or title_hint or "视频摘要").strip() or "视频摘要"
-        return title, transcript, segments
+        source_kind = str(payload.get("source_kind") or "").strip() or None
+        return title, transcript, segments, source_kind
 
     def _coerce_transcript_segments(self, value: object) -> list[dict[str, object]]:
         if not isinstance(value, list):
@@ -1077,6 +1087,7 @@ class RealPipelineRunner(PipelineRunner):
         segments: list[dict[str, object]],
         title: str,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
+        source_kind: str | None = None,
     ) -> dict[str, object]:
         emit(
             "summarizing",
@@ -1095,7 +1106,13 @@ class RealPipelineRunner(PipelineRunner):
                 len(segments),
             )
             try:
-                summary = self._summarize_with_llm(transcript, segments, title, emit)
+                summary = self._summarize_with_llm(
+                    transcript,
+                    segments,
+                    title,
+                    emit,
+                    source_kind=source_kind,
+                )
                 used_llm_summary = True
             except (LLMAuthenticationError, LLMConfigurationError) as exc:
                 logger.warning("llm unavailable, fallback to rule summary reason=%s", exc)
@@ -1128,6 +1145,7 @@ class RealPipelineRunner(PipelineRunner):
                     segments=segments,
                     title=title,
                     summary=summary,
+                    source_kind=source_kind,
                 )
                 knowledge_note_markdown = str(note_payload.get("knowledgeNoteMarkdown") or "").strip()
                 if knowledge_note_markdown:
@@ -1180,10 +1198,13 @@ class RealPipelineRunner(PipelineRunner):
         segments: list[dict[str, object]],
         title: str,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
+        source_kind: str | None = None,
     ) -> dict[str, object]:
         base_url = (self._settings.llm_base_url or "").rstrip("/")
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+        if source_kind == "aggregate_series":
+            return self._summarize_aggregate_series_with_llm(base_url, transcript, segments, title, emit)
         chunks = self._build_summary_chunks(segments)
         if not chunks:
             chunks = [
@@ -1296,6 +1317,39 @@ class RealPipelineRunner(PipelineRunner):
         merged["llm_completion_tokens"] = total_completion_tokens + (_safe_int(merged.get("llm_completion_tokens")) or 0)
         merged["llm_total_tokens"] = total_tokens + (_safe_int(merged.get("llm_total_tokens")) or 0)
         return merged
+
+    def _summarize_aggregate_series_with_llm(
+        self,
+        base_url: str,
+        transcript: str,
+        segments: list[dict[str, object]],
+        title: str,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> dict[str, object]:
+        page_count = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
+        transcript_excerpt = self._build_aggregate_series_excerpt(transcript)
+        segments_excerpt = self._build_aggregate_series_segments_excerpt(segments)
+        emit(
+            "summarizing",
+            93,
+            "正在生成全集总结",
+            {"page_count": page_count, "input_chars": len(transcript_excerpt)},
+        )
+        logger.info(
+            "llm aggregate series request model=%s pages=%d transcript_chars=%d segments_chars=%d",
+            self._settings.llm_model,
+            page_count,
+            len(transcript_excerpt),
+            len(segments_excerpt),
+        )
+        return self._request_llm_json(
+            base_url=base_url,
+            payload=self._build_aggregate_series_summary_payload(
+                title=title,
+                transcript_excerpt=transcript_excerpt,
+                segments_excerpt=segments_excerpt,
+            ),
+        )
 
     def _request_llm_summary_chunk(
         self,
@@ -1429,6 +1483,10 @@ class RealPipelineRunner(PipelineRunner):
         self._request_llm_json(base_url=base_url, payload=payload)
 
     def _parse_llm_json_content(self, content: str) -> dict[str, object]:
+        # 移除可能的 think 标签（某些模型如 MiniMax-M2.5 可能返回）
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+
         candidates = [str(content or "").strip()]
         extracted = _extract_json_object_text(content)
         if extracted not in candidates:
@@ -1464,6 +1522,84 @@ class RealPipelineRunner(PipelineRunner):
             "response_format": {"type": "json_object"},
             "enable_thinking": False,
         }
+
+    def _build_aggregate_series_summary_payload(
+        self,
+        title: str,
+        transcript_excerpt: str,
+        segments_excerpt: str,
+    ) -> dict[str, object]:
+        messages = self._build_aggregate_series_summary_messages(title, transcript_excerpt, segments_excerpt)
+        messages = self._ensure_json_keyword_in_messages(messages)
+        return {
+            "model": self._settings.llm_model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "enable_thinking": False,
+        }
+
+    def _build_aggregate_series_summary_messages(
+        self,
+        title: str,
+        transcript_excerpt: str,
+        segments_excerpt: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是一名中文长内容总编辑，正在把一个多 P 视频的分 P 摘要整合为全集总结。"
+                    "输入不是完整转写，而是每个分 P 已生成的概览、要点、章节和笔记摘录。"
+                    "你的任务是做二次归纳：先逐 P 扫描，再跨 P 合并去重，最后输出能直接展示的结构化 JSON。"
+                    "所有结论必须来自输入，不得补充外部资料，不得编造，不得输出 JSON 以外的文字。"
+                    "You must return valid json only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": self._render_user_prompt_template(
+                    """请基于下面的多 P 摘要素材生成「全集总结」JSON。
+
+工作步骤必须隐式完成，不要把步骤写进输出：
+1. 逐 P 扫描：每个 `## P数字 标题` 是一个分 P，优先读取其中 `[重点-概览]`、`[重点-要点]`、`[重点-章节]`、`[重点-笔记]`。
+2. 每个分 P 至少保留一个高价值信息点，避免只关注开头或结尾导致中间分 P 丢失。
+3. 跨 P 合并：把重复观点合并，把递进关系、因果关系、对比关系、结论与限制提炼出来。
+4. 输出面向全集，而不是逐 P 流水账；但所有章节都必须保留可跳转的 P 数定位。
+
+强约束：
+1. 只返回合法 JSON，对象顶层只允许包含 title、overview、bulletPoints、chapters、chapterGroups 五个字段。
+2. title 使用简洁中文标题，体现全集主题，不要机械重复原题。
+3. overview 写 3 到 5 句，覆盖全集主线、关键展开、最终结论或价值。
+4. bulletPoints 写 5 到 8 条，每条 28 到 88 个字，优先写跨 P 的综合结论、关键方法、限制、争议或行动建议。
+5. chapters 表示全集的主题段落或内容推进，不要等同于每个分 P 一条；每项必须包含 title、start、summary：
+   - start 必须是该主题最适合跳转的分 P 数字，例如 1、2、3；禁止使用时间戳、秒数、00:00、分钟。
+   - title 要像真实小标题，不能写“章节 1”“P1 总结”这类占位标题。
+   - summary 写 40 到 120 个字，说明这个主题覆盖哪些 P、核心信息和为什么重要。
+6. chapterGroups 是大主题分组，每项包含 title、start、summary、children；children 必须来自 chapters。
+   - group.start 同样是分 P 数字。
+   - 分组按语义组织，不要机械平均分配。
+7. 如果某个 P 的材料很短，只做保守归纳；不要补充没有出现的信息。
+8. 不要写”视频主要讲了””本合集介绍了”这类低信息密度开头，直接进入信息本体。
+9. 当分 P 数量较多（超过 20P）时，chapters 应该按主题合并多个相邻分 P，而不是每个分 P 一条。
+10. 当分 P 数量较多时，bulletPoints 应该聚焦跨分 P 的综合结论，而不是单个分 P 的内容。
+
+输出格式示例：
+{{"title":"","overview":"","bulletPoints":["", "", "", "", ""],"chapters":[{{"title":"","start":1,"summary":""}}],"chapterGroups":[{{"title":"","start":1,"summary":"","children":[{{"title":"","start":1,"summary":""}}]}}]}}
+
+全集标题：
+{title}
+
+逐 P 摘要素材：
+{transcript_excerpt}
+
+P 数索引：
+{segments_excerpt}""",
+                    title=title,
+                    transcript_excerpt=transcript_excerpt,
+                    segments_excerpt=segments_excerpt,
+                ),
+            },
+        ]
 
     def _build_summary_messages(
         self,
@@ -1627,6 +1763,59 @@ class RealPipelineRunner(PipelineRunner):
             },
         ]
 
+    def _build_aggregate_series_note_messages(
+        self,
+        title: str,
+        transcript_excerpt: str,
+        segments_excerpt: str,
+        summary_json: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是一名中文知识编辑，正在把多 P 视频的结构化全集总结整理成阅读笔记。"
+                    "输入是分 P 摘要素材和已生成的全集结构化摘要，不是完整转写。"
+                    "你需要做主题化整理，保留 P 数定位，不能补充外部资料，不能输出 JSON 以外的文字。"
+                    "You must return valid json only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": self._render_user_prompt_template(
+                    """请输出一个 JSON 对象，顶层只包含 knowledgeNoteMarkdown。
+
+写作目标：
+- 生成一篇「全集总结」阅读笔记，面向复盘整套多 P 视频。
+- 不要把分 P 摘要逐条搬运成流水账；要按主题、方法、结论、限制进行重组。
+- 关键段落中保留 P 数定位，例如“P2-P4 说明...”“这一点从 P5 开始展开”。
+
+强约束：
+1. knowledgeNoteMarkdown 必须是完整 Markdown，不要代码围栏。
+2. 不要写时间戳，不要写 00:00；所有定位都使用 P 数。
+3. 不要照抄逐 P 素材；要提炼主线、重点和跨 P 关系。
+4. 不要编造输入中没有的信息。
+5. 建议结构：核心结论、全集主线、分主题重点、关键转折/对比、回看路径。
+
+全集标题：
+{title}
+
+已有全集结构化摘要：
+{summary_json}
+
+逐 P 摘要素材：
+{transcript_excerpt}
+
+P 数索引：
+{segments_excerpt}""",
+                    title=title,
+                    transcript_excerpt=transcript_excerpt,
+                    segments_excerpt=segments_excerpt,
+                    summary_json=summary_json,
+                ),
+            },
+        ]
+
     def _ensure_json_keyword_in_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         if any("json" in str(message.get("content") or "").lower() for message in messages):
             return messages
@@ -1667,8 +1856,17 @@ class RealPipelineRunner(PipelineRunner):
         transcript_excerpt: str,
         segments_excerpt: str,
         summary_json: str,
+        source_kind: str | None = None,
     ) -> dict[str, object]:
-        messages = self._build_knowledge_note_messages(title, transcript_excerpt, segments_excerpt, summary_json)
+        if source_kind == "aggregate_series":
+            messages = self._build_aggregate_series_note_messages(
+                title,
+                transcript_excerpt,
+                segments_excerpt,
+                summary_json,
+            )
+        else:
+            messages = self._build_knowledge_note_messages(title, transcript_excerpt, segments_excerpt, summary_json)
         messages = self._ensure_json_keyword_in_messages(messages)
         return {
             "model": self._settings.llm_model,
@@ -1683,12 +1881,17 @@ class RealPipelineRunner(PipelineRunner):
         segments: list[dict[str, object]],
         title: str,
         summary: dict[str, object],
+        source_kind: str | None = None,
     ) -> dict[str, object]:
         base_url = (self._settings.llm_base_url or "").rstrip("/")
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
-        transcript_excerpt = self._build_transcript_excerpt(transcript)
-        segments_excerpt = self._build_segments_excerpt(segments)
+        if source_kind == "aggregate_series":
+            transcript_excerpt = self._build_aggregate_series_excerpt(transcript)
+            segments_excerpt = self._build_aggregate_series_segments_excerpt(segments)
+        else:
+            transcript_excerpt = self._build_transcript_excerpt(transcript)
+            segments_excerpt = self._build_segments_excerpt(segments)
         summary_json = _truncate_text(
             json.dumps(
                 {
@@ -1713,6 +1916,7 @@ class RealPipelineRunner(PipelineRunner):
             transcript_excerpt=transcript_excerpt,
             segments_excerpt=segments_excerpt,
             summary_json=summary_json,
+            source_kind=source_kind,
         )
         result = self._request_llm_json(base_url=base_url, payload=payload)
         result.setdefault("knowledgeNoteMarkdown", "")
@@ -2179,6 +2383,127 @@ class RealPipelineRunner(PipelineRunner):
         head = lines[:70]
         tail = lines[-35:]
         return _truncate_text("\n".join(head + ["[...中间转写已省略...]"] + tail), 3600)
+
+    def _build_aggregate_series_excerpt(self, transcript: str) -> str:
+        blocks = [block.strip() for block in re.split(r"\n(?=##\s*P\d+\s)", transcript) if block.strip()]
+        if not blocks:
+            return _truncate_text(transcript, 10_000)
+
+        # 根据总 P 数动态调整压缩策略
+        page_count = len(blocks)
+
+        # 动态计算每 P 的字符预算，保证所有 P 都能被包含
+        if page_count <= 20:
+            per_page_budget = 500
+            total_budget = 15_000
+        elif page_count <= 40:
+            per_page_budget = 350
+            total_budget = 18_000
+        elif page_count <= 60:
+            per_page_budget = 250
+            total_budget = 20_000
+        else:
+            per_page_budget = 180
+            total_budget = 24_000
+
+        # 优先级：概览 > 要点 > 章节 > 笔记
+        compact_blocks: list[str] = []
+        for block in blocks:
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if not lines:
+                continue
+
+            head = lines[0]  # ## P 数 标题
+            remaining_budget = per_page_budget - len(head) - 2
+
+            # 分类不同优先级的行
+            overview_lines = []
+            keypoint_lines = []
+            chapter_lines = []
+            note_lines = []
+
+            for line in lines[1:]:
+                if not line.startswith("[重点-"):
+                    continue
+                if line.startswith("[重点 - 概览]"):
+                    overview_lines.append(line)
+                elif line.startswith("[重点 - 要点]"):
+                    keypoint_lines.append(line)
+                elif line.startswith("[重点 - 章节]"):
+                    chapter_lines.append(line)
+                elif line.startswith("[重点 - 笔记]"):
+                    note_lines.append(line)
+
+            # 按优先级选择行，确保高优先级内容优先保留
+            selected_lines = []
+
+            # 1. 概览优先级最高，最多保留 1 条
+            for line in overview_lines[:1]:
+                truncated = _truncate_text(line, min(remaining_budget - 2, 200))
+                if truncated:
+                    selected_lines.append(truncated)
+                    remaining_budget -= len(truncated) + 2
+
+            # 2. 要点优先级次之，最多保留 2 条
+            for line in keypoint_lines[:2]:
+                if remaining_budget <= 20:
+                    break
+                truncated = _truncate_text(line, min(remaining_budget - 2, 150))
+                if truncated:
+                    selected_lines.append(truncated)
+                    remaining_budget -= len(truncated) + 2
+
+            # 3. 章节和笔记根据剩余预算决定
+            if remaining_budget > 40:
+                # 章节和笔记合并考虑，优先章节
+                other_lines = chapter_lines[:2] + note_lines[:1]
+                for line in other_lines:
+                    if remaining_budget <= 30:
+                        break
+                    truncated = _truncate_text(line, min(remaining_budget - 2, 100))
+                    if truncated:
+                        selected_lines.append(truncated)
+                        remaining_budget -= len(truncated) + 2
+
+            compact_blocks.append("\n".join([head, *selected_lines]))
+
+        return _truncate_text("\n\n".join(compact_blocks), total_budget)
+
+    def _build_aggregate_series_segments_excerpt(self, segments: list[dict[str, object]]) -> str:
+        seen_pages: set[int] = set()
+        compact_segments: list[dict[str, object]] = []
+
+        # 根据总 P 数动态调整每 P 的字符预算
+        total_pages = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
+
+        if total_pages <= 20:
+            per_page_label_limit = 150
+            total_limit = 4800
+        elif total_pages <= 40:
+            per_page_label_limit = 120
+            total_limit = 6000
+        elif total_pages <= 60:
+            per_page_label_limit = 100
+            total_limit = 7200
+        else:
+            per_page_label_limit = 80
+            total_limit = 9600
+
+        for item in segments:
+            try:
+                page_number = int(float(item.get("start") or 0))
+            except (TypeError, ValueError):
+                continue
+            if page_number <= 0 or page_number in seen_pages:
+                continue
+            seen_pages.add(page_number)
+            compact_segments.append(
+                {
+                    "page": page_number,
+                    "label": _truncate_text(str(item.get("text") or "").strip(), per_page_label_limit),
+                }
+            )
+        return _truncate_text(json.dumps(compact_segments, ensure_ascii=False), total_limit)
 
     def _build_segments_excerpt(self, segments: list[dict[str, object]]) -> str:
         if len(segments) <= 32:
@@ -2677,8 +3002,53 @@ class RealPipelineRunner(PipelineRunner):
     def _chapter_limit(self, segments: list[dict[str, object]]) -> int:
         if not segments:
             return 12
+
+        # 检测是否为全集总结场景：segments 的 start 值是连续整数（分 P 号），且范围较大
+        is_aggregate_series = self._is_aggregate_series_segments(segments)
+
+        if is_aggregate_series:
+            # 全集总结场景：根据 P 数决定限制，最多允许 100 个章节
+            page_count = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
+            return max(20, min(100, page_count))
+
+        # 普通单 P 视频场景：基于时长计算
         target = self._suggest_chapter_count(segments)
         return max(8, min(48, target * 2))
+
+    def _is_aggregate_series_segments(self, segments: list[dict[str, object]]) -> bool:
+        """检测 segments 是否属于全集总结场景（start 值为分 P 号而非时间戳）"""
+        if len(segments) < 5:
+            return False
+
+        # 提取所有 start 值并转换为整数
+        start_values = []
+        for item in segments:
+            start = item.get("start")
+            if start is not None:
+                try:
+                    start_values.append(int(float(start)))
+                except (TypeError, ValueError):
+                    continue
+
+        if len(start_values) < 5:
+            return False
+
+        # 检查是否为连续或接近连续的整数序列（分 P 号）
+        # 全集总结的 segments 通常 start 值范围较大且为整数
+        min_start = min(start_values)
+        max_start = max(start_values)
+        range_span = max_start - min_start
+
+        # 如果 start 值范围超过 10 且平均间隔接近 1，判断为全集总结
+        if range_span > 10:
+            unique_starts = sorted(set(start_values))
+            if len(unique_starts) >= 5:
+                # 计算平均间隔
+                avg_gap = (unique_starts[-1] - unique_starts[0]) / (len(unique_starts) - 1) if len(unique_starts) > 1 else 1
+                # 如果平均间隔在 0.8-1.5 之间，很可能是分 P 号
+                return 0.8 <= avg_gap <= 1.5
+
+        return False
 
     def _chapter_group_limit(self, chapters: list[dict[str, object]]) -> int:
         if not chapters:
@@ -2688,6 +3058,17 @@ class RealPipelineRunner(PipelineRunner):
     def _suggest_chapter_count(self, segments: list[dict[str, object]]) -> int:
         if not segments:
             return 4
+
+        # 检测是否为全集总结场景
+        is_aggregate_series = self._is_aggregate_series_segments(segments)
+
+        if is_aggregate_series:
+            # 全集总结场景：根据 P 数决定章节数，每 3-5P 一个章节
+            page_count = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
+            # 目标章节数：每 4P 一个章节，最少 8 个，最多 50 个
+            return max(8, min(50, math.ceil(page_count / 4)))
+
+        # 普通单 P 视频场景：基于时长计算
         first_start = float(segments[0].get("start") or 0)
         last_end = float(segments[-1].get("end") or segments[-1].get("start") or first_start)
         duration = max(0.0, last_end - first_start)
@@ -2709,11 +3090,52 @@ class RealPipelineRunner(PipelineRunner):
         if not chapters:
             return []
 
+        # 检测是否为全集总结场景
+        is_aggregate_series = self._is_aggregate_series_segments(segments)
+
         ordered = sorted(chapters, key=lambda item: float(item.get("start") or 0))
         target_count = self._suggest_chapter_count(segments)
+
         if len(ordered) <= target_count:
             return ordered
 
+        # 全集总结场景：使用基于 P 数的窗口划分
+        if is_aggregate_series:
+            page_count = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
+            window_size = max(3.0, page_count / max(1, target_count))  # 每窗口约 3-5P
+
+            buckets: list[list[dict[str, object]]] = []
+            for chapter in ordered:
+                start = float(chapter.get("start") or 0)
+                bucket_index = min(target_count - 1, max(0, int((start - 1) / window_size)))
+                while len(buckets) <= bucket_index:
+                    buckets.append([])
+                buckets[bucket_index].append(chapter)
+
+            merged_buckets: list[dict[str, object]] = []
+            for bucket in buckets:
+                if not bucket:
+                    continue
+                merged_buckets.append(self._merge_chapter_bucket(bucket))
+
+            if len(merged_buckets) > target_count:
+                sampled: list[dict[str, object]] = []
+                for index in range(target_count):
+                    source_index = min(len(merged_buckets) - 1, round(index * (len(merged_buckets) - 1) / max(1, target_count - 1)))
+                    sampled.append(merged_buckets[source_index])
+                deduped: list[dict[str, object]] = []
+                seen: set[tuple[int, str]] = set()
+                for chapter in sampled:
+                    key = (int(float(chapter.get("start") or 0)), self._dedupe_text_key(str(chapter.get("title") or "")))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(chapter)
+                merged_buckets = deduped
+
+            return merged_buckets
+
+        # 普通单 P 视频场景：基于时长的窗口划分
         first_start = float(segments[0].get("start") or ordered[0].get("start") or 0) if segments else float(ordered[0].get("start") or 0)
         last_end = (
             float(segments[-1].get("end") or segments[-1].get("start") or ordered[-1].get("start") or first_start)

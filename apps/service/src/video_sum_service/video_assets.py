@@ -157,6 +157,52 @@ def build_base_video_asset(
     )
 
 
+def merge_video_asset_metadata(
+    existing: VideoAssetRecord,
+    refreshed: VideoAssetRecord,
+) -> VideoAssetRecord:
+    existing_pages = {page.page: page for page in existing.pages}
+    merged_pages: list[VideoPageOptionResponse] = []
+
+    if refreshed.pages:
+        for refreshed_page in refreshed.pages:
+            existing_page = existing_pages.get(refreshed_page.page)
+            if existing_page is None:
+                merged_pages.append(refreshed_page)
+                continue
+            merged_pages.append(
+                existing_page.model_copy(
+                    update={
+                        "title": refreshed_page.title or existing_page.title,
+                        "source_url": refreshed_page.source_url or existing_page.source_url,
+                        "cover_url": refreshed_page.cover_url or existing_page.cover_url,
+                        "duration": refreshed_page.duration if refreshed_page.duration is not None else existing_page.duration,
+                    }
+                )
+            )
+        refreshed_page_numbers = {page.page for page in refreshed.pages}
+        for existing_page in existing.pages:
+            if existing_page.page not in refreshed_page_numbers:
+                merged_pages.append(existing_page)
+    else:
+        merged_pages = list(existing.pages)
+
+    cover_url = refreshed.cover_url or existing.cover_url
+    if not cover_url and merged_pages:
+        cover_url = next((page.cover_url for page in merged_pages if page.cover_url), "")
+
+    return existing.model_copy(
+        update={
+            "platform": refreshed.platform or existing.platform,
+            "title": refreshed.title or existing.title,
+            "source_url": refreshed.source_url or existing.source_url,
+            "cover_url": cover_url,
+            "duration": refreshed.duration if refreshed.duration is not None else existing.duration,
+            "pages": merged_pages,
+        }
+    )
+
+
 def resolve_local_media_path(value: str) -> Path | None:
     raw = str(value or "").strip()
     if not raw:

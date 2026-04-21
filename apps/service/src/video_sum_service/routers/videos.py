@@ -11,13 +11,18 @@ from video_sum_core.models.tasks import InputType, TaskInput
 from video_sum_service.context import LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import (
+    AggregateSummaryRequest,
     ResummaryRequest,
     TaskDetailResponse,
     TaskSummaryResponse,
     VideoAssetDetailResponse,
     VideoAssetSummaryResponse,
+    VideoAssetRecord,
     VideoProbeRequest,
     VideoProbeResponse,
+    VideoTaskBatchPageResponse,
+    VideoTaskBatchRequest,
+    VideoTaskBatchResponse,
     VideoTaskCreateRequest,
 )
 from video_sum_service.task_artifacts import cleanup_video_files, load_task_segments
@@ -25,6 +30,7 @@ from video_sum_service.video_assets import (
     infer_local_input_type,
     is_supported_local_media_file,
     localize_video_cover,
+    merge_video_asset_metadata,
     probe_local_video_asset,
     probe_video_asset,
     resolve_video_page,
@@ -32,6 +38,311 @@ from video_sum_service.video_assets import (
 from video_sum_service.worker import TaskWorker
 
 router = APIRouter(prefix="/api/v1/videos")
+AGGREGATE_SUMMARY_PAGE_NUMBER = 0
+AGGREGATE_SUMMARY_PAGE_TITLE = "全集总结"
+AGGREGATE_SUMMARY_TITLE_SUFFIX = "｜全集总结"
+AGGREGATE_OVERVIEW_LIMIT = 520
+AGGREGATE_KEY_POINT_LIMIT = 160
+AGGREGATE_CHAPTER_LIMIT = 180
+AGGREGATE_NOTE_LIMIT = 360
+AGGREGATE_MAX_KEY_POINTS_PER_PAGE = 8
+AGGREGATE_MAX_CHAPTERS_PER_PAGE = 8
+
+
+def _normalize_batch_page_numbers(video: VideoAssetRecord, page_numbers: list[int]) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_page_number in page_numbers:
+        if raw_page_number in seen:
+            continue
+        seen.add(raw_page_number)
+        normalized.append(int(raw_page_number))
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="至少选择一个分 P。")
+    if not video.pages:
+        raise HTTPException(status_code=400, detail="当前视频不包含可批量处理的分 P。")
+
+    existing_pages = {page.page for page in video.pages}
+    invalid_pages = [page_number for page_number in normalized if page_number not in existing_pages]
+    if invalid_pages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"所选分 P 不存在：{', '.join(f'P{page_number}' for page_number in invalid_pages)}。",
+        )
+    return normalized
+
+
+def _find_latest_completed_task_for_page(tasks, page_number: int):
+    return next(
+        (
+            task
+            for task in tasks
+            if (task.page_number if task.page_number is not None else 1) == page_number
+            and task.status.value == "completed"
+            and task.result is not None
+        ),
+        None,
+    )
+
+
+def _find_resummary_source_task(
+    task_store: SqliteTaskRepository,
+    video_id: str,
+    body: ResummaryRequest,
+):
+    source_task = task_store.get_task(body.task_id) if body.task_id else None
+    if source_task is None:
+        source_task = next(
+            (
+                task
+                for task in task_store.list_tasks_for_video(video_id)
+                if (
+                    task.result
+                    and task.result.transcript_text.strip()
+                    and task.result.artifacts.get("summary_path")
+                    and (
+                        body.page_number is None
+                        or _task_page_number(task) == body.page_number
+                    )
+                )
+            ),
+            None,
+        )
+    return source_task
+
+
+def _task_page_number(task) -> int:
+    return task.page_number if task.page_number is not None else 1
+
+
+def _compact_text(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _has_aggregate_summary_material(result) -> bool:
+    return bool(
+        str(result.overview or "").strip()
+        or any(str(item).strip() for item in result.key_points)
+        or any(str(item).strip() for item in result.segment_summaries)
+        or any(isinstance(item, dict) and str(item.get("summary") or "").strip() for item in result.timeline)
+        or str(result.knowledge_note_markdown or "").strip()
+    )
+
+
+def _select_aggregate_source_tasks(video: VideoAssetRecord, tasks, page_numbers: list[int] | None):
+    requested_pages = set(page_numbers) if page_numbers is not None else None
+    page_titles = {page.page: page.title for page in video.pages}
+    latest_completed_by_page = {}
+    for task in tasks:
+        page_number = _task_page_number(task)
+        if page_number <= 0:
+            continue
+        if requested_pages is not None and page_number not in requested_pages:
+            continue
+        if task.status.value != "completed" or task.result is None:
+            continue
+        if not _has_aggregate_summary_material(task.result):
+            continue
+        if page_number not in page_titles:
+            continue
+        latest_completed_by_page.setdefault(page_number, task)
+    return [
+        latest_completed_by_page[page_number]
+        for page_number in sorted(latest_completed_by_page)
+    ]
+
+
+def _build_aggregate_summary_payload(
+    video: VideoAssetRecord,
+    source_tasks,
+) -> tuple[str, str, list[dict[str, object]]]:
+    title = f"{video.title}{AGGREGATE_SUMMARY_TITLE_SUFFIX}"
+    transcript_parts: list[str] = []
+    segments: list[dict[str, object]] = []
+
+    # 根据总 P 数动态调整每 P 的压缩限制
+    page_count = len(source_tasks)
+    if page_count <= 20:
+        overview_limit = 520
+        key_point_limit = 160
+        chapter_limit = 180
+        note_limit = 360
+        max_key_points_per_page = 8
+        max_chapters_per_page = 8
+    elif page_count <= 40:
+        overview_limit = 400
+        key_point_limit = 120
+        chapter_limit = 140
+        note_limit = 280
+        max_key_points_per_page = 6
+        max_chapters_per_page = 6
+    elif page_count <= 60:
+        overview_limit = 300
+        key_point_limit = 100
+        chapter_limit = 100
+        note_limit = 200
+        max_key_points_per_page = 4
+        max_chapters_per_page = 4
+    else:
+        overview_limit = 200
+        key_point_limit = 80
+        chapter_limit = 70
+        note_limit = 140
+        max_key_points_per_page = 3
+        max_chapters_per_page = 3
+
+    for task in source_tasks:
+        result = task.result
+        assert result is not None
+        page_number = _task_page_number(task)
+        page_title = task.page_title or task.task_input.title or f"P{page_number}"
+        key_points = [
+            _compact_text(item, key_point_limit)
+            for item in result.key_points
+            if str(item).strip()
+        ][:max_key_points_per_page]
+        timeline = [item for item in result.timeline if isinstance(item, dict)]
+        segment_summaries = [
+            _compact_text(item, chapter_limit)
+            for item in result.segment_summaries
+            if str(item).strip()
+        ]
+        note = _compact_text(result.knowledge_note_markdown, note_limit)
+        overview = _compact_text(result.overview, overview_limit)
+
+        chapter_fragments: list[str] = []
+        for chapter in timeline[:max_chapters_per_page]:
+            chapter_title = str(chapter.get("title") or "").strip() or "章节"
+            chapter_summary = _compact_text(chapter.get("summary"), chapter_limit)
+            if chapter_summary:
+                chapter_fragments.append(f"{chapter_title}：{chapter_summary}")
+
+        section_lines = [f"## P{page_number} {page_title}"]
+        if overview:
+            section_lines.append(f"[重点-概览] {overview}")
+        if key_points:
+            section_lines.append(f"[重点-要点] {'；'.join(key_points)}")
+        if chapter_fragments:
+            section_lines.append(f"[重点-章节] {'；'.join(chapter_fragments)}")
+        elif segment_summaries:
+            section_lines.append(
+                f"[重点-片段] {'；'.join(segment_summaries[:max_chapters_per_page])}"
+            )
+        if note:
+            section_lines.append(f"[重点-笔记] {note}")
+
+        section_text = "\n".join(section_lines).strip()
+        transcript_parts.append(section_text)
+        segments.append(
+            {
+                "start": float(page_number),
+                "end": float(page_number),
+                "text": f"P{page_number} {page_title}：{overview or page_title}",
+            }
+        )
+
+        for chapter in timeline[:max_chapters_per_page]:
+            chapter_summary = _compact_text(chapter.get("summary"), chapter_limit)
+            if not chapter_summary:
+                continue
+            chapter_title = str(chapter.get("title") or "").strip() or "章节"
+            segments.append(
+                {
+                    "start": float(page_number),
+                    "end": float(page_number),
+                    "text": f"P{page_number} {page_title} - {chapter_title}\n{chapter_summary}",
+                }
+            )
+
+    return title, "\n\n".join(transcript_parts).strip(), segments
+
+
+def _create_video_task_record(
+    *,
+    task_store: SqliteTaskRepository,
+    task_worker: TaskWorker,
+    video: VideoAssetRecord,
+    page_number: int | None = None,
+):
+    page = resolve_video_page(video, page_number)
+    if video.pages and page_number is not None and page is None:
+        raise HTTPException(status_code=400, detail="Selected page not found.")
+
+    source_url = page.source_url if page else video.source_url
+    title = page.title if page else video.title
+    logger.info(
+        "create video task video_id=%s page=%s title=%s source=%s",
+        video.video_id,
+        page.page if page else None,
+        title,
+        source_url,
+    )
+    input_type = InputType.URL
+    if str(video.platform or "").lower() == "local":
+        input_type = infer_local_input_type(source_url)
+    record = task_store.create_task(
+        TaskInput(input_type=input_type, source=source_url, title=title, platform_hint=video.platform),
+        video_id=video.video_id,
+        page_number=page.page if page else None,
+        page_title=title,
+    )
+    task_worker.submit(record)
+    refreshed = task_store.get_task(record.task_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def _create_resummary_task_record(
+    *,
+    task_store: SqliteTaskRepository,
+    task_worker: TaskWorker,
+    video: VideoAssetRecord,
+    source_task,
+):
+    if source_task.video_id != video.video_id:
+        raise HTTPException(status_code=400, detail="所选任务不属于当前视频。")
+    if source_task.result is None or not source_task.result.transcript_text.strip():
+        raise HTTPException(status_code=400, detail="所选任务还没有可复用的转写文本。")
+
+    summary_path = source_task.result.artifacts.get("summary_path") if source_task.result else None
+    if not summary_path:
+        raise HTTPException(status_code=400, detail="所选任务缺少可复用的分段文件。")
+    segments = load_task_segments(summary_path)
+
+    payload = json.dumps(
+        {
+            "title": source_task.task_input.title or video.title,
+            "transcript": source_task.result.transcript_text,
+            "segments": segments,
+        },
+        ensure_ascii=False,
+    )
+    logger.info(
+        "create video resummary task video_id=%s source_task_id=%s title=%s",
+        video.video_id,
+        source_task.task_id,
+        source_task.task_input.title or video.title,
+    )
+    record = task_store.create_task(
+        TaskInput(
+            input_type=InputType.TRANSCRIPT_TEXT,
+            source=payload,
+            title=source_task.task_input.title or video.title,
+            platform_hint=source_task.task_input.platform_hint,
+            options=source_task.task_input.options,
+        ),
+        video_id=video.video_id,
+        page_number=source_task.page_number,
+        page_title=source_task.page_title or source_task.task_input.title or video.title,
+    )
+    task_worker.submit(record)
+    refreshed = task_store.get_task(record.task_id)
+    assert refreshed is not None
+    return refreshed
 
 
 def normalize_uploaded_media_filename(filename: str) -> tuple[str, str]:
@@ -102,7 +413,7 @@ def probe_video(request: VideoProbeRequest, app_request: Request) -> VideoProbeR
     probed, pages, requires_selection = probe_video_asset(request.url, request.force_refresh)
     existing = task_store.get_video_asset_by_canonical_id(probed.canonical_id)
     cached = existing is not None and not request.force_refresh
-    asset = existing if cached else task_store.upsert_video_asset(probed)
+    asset = existing if cached else task_store.upsert_video_asset(merge_video_asset_metadata(existing, probed) if existing else probed)
     asset = localize_video_cover(task_store, asset)
     return VideoProbeResponse(
         video=asset.to_summary(),
@@ -218,45 +529,12 @@ def create_video_task(
     video = task_store.get_video_asset(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found.")
-    page = resolve_video_page(video, request_body.page_number if request_body else None)
-    if video.pages and request_body and request_body.page_number is not None and page is None:
-        raise HTTPException(status_code=400, detail="Selected page not found.")
-    if page and (not video.cover_url or video.duration is None or page.cover_url == "" or page.duration is None):
-        refreshed_video, _, _ = probe_video_asset(page.source_url, force_refresh=False)
-        merged_pages = refreshed_video.pages or video.pages
-        merged_page = next((item for item in merged_pages if item.page == page.page), page)
-        video = task_store.upsert_video_asset(
-            video.model_copy(
-                update={
-                    "cover_url": refreshed_video.cover_url or video.cover_url,
-                    "duration": refreshed_video.duration if refreshed_video.duration is not None else video.duration,
-                    "pages": merged_pages,
-                }
-            )
-        )
-        page = merged_page
-        page = resolve_video_page(video, request_body.page_number if request_body else None) or page
-    source_url = page.source_url if page else video.source_url
-    title = page.title if page else video.title
-    logger.info(
-        "create video task video_id=%s page=%s title=%s source=%s",
-        video.video_id,
-        page.page if page else None,
-        title,
-        source_url,
+    refreshed = _create_video_task_record(
+        task_store=task_store,
+        task_worker=task_worker,
+        video=video,
+        page_number=request_body.page_number if request_body else None,
     )
-    input_type = InputType.URL
-    if str(video.platform or "").lower() == "local":
-        input_type = infer_local_input_type(source_url)
-    record = task_store.create_task(
-        TaskInput(input_type=input_type, source=source_url, title=title, platform_hint=video.platform),
-        video_id=video.video_id,
-        page_number=page.page if page else None,
-        page_title=title,
-    )
-    task_worker.submit(record)
-    refreshed = task_store.get_task(record.task_id)
-    assert refreshed is not None
     return refreshed.to_detail()
 
 
@@ -268,60 +546,221 @@ def create_video_resummary_task(video_id: str, body: ResummaryRequest, request: 
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found.")
 
-    source_task = task_store.get_task(body.task_id) if body.task_id else None
-    if source_task is None:
-        source_task = next(
-            (
-                task
-                for task in task_store.list_tasks_for_video(video_id)
-                if (
-                    task.result
-                    and task.result.transcript_text.strip()
-                    and task.result.artifacts.get("summary_path")
-                    and (body.page_number is None or task.page_number == body.page_number)
-                )
-            ),
-            None,
-        )
+    source_task = _find_resummary_source_task(task_store, video_id, body)
     if source_task is None:
         raise HTTPException(status_code=400, detail="当前视频还没有可复用的转写结果。")
-    if source_task.video_id != video_id:
-        raise HTTPException(status_code=400, detail="所选任务不属于当前视频。")
-    if source_task.result is None or not source_task.result.transcript_text.strip():
-        raise HTTPException(status_code=400, detail="所选任务还没有可复用的转写文本。")
 
-    summary_path = source_task.result.artifacts.get("summary_path") if source_task.result else None
-    if not summary_path:
-        raise HTTPException(status_code=400, detail="所选任务缺少可复用的分段文件。")
-    segments = load_task_segments(summary_path)
+    refreshed = _create_resummary_task_record(
+        task_store=task_store,
+        task_worker=task_worker,
+        video=video,
+        source_task=source_task,
+    )
+    return refreshed.to_detail()
 
+
+@router.post(
+    "/{video_id}/tasks/aggregate-summary",
+    response_model=TaskDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_video_aggregate_summary_task(
+    video_id: str,
+    request: Request,
+    body: AggregateSummaryRequest | None = None,
+) -> TaskDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    task_worker: TaskWorker = request.app.state.task_worker
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    if not video.pages:
+        raise HTTPException(status_code=400, detail="当前视频不是多 P 视频，无法生成全集总结。")
+
+    requested_pages = body.page_numbers if body and body.page_numbers is not None else None
+    if requested_pages is not None:
+        _normalize_batch_page_numbers(video, requested_pages)
+
+    source_tasks = _select_aggregate_source_tasks(
+        video,
+        task_store.list_tasks_for_video(video_id),
+        requested_pages,
+    )
+    if not source_tasks:
+        raise HTTPException(status_code=400, detail="还没有可汇总的分 P 摘要，请先生成至少一个分 P 摘要。")
+
+    title, transcript, segments = _build_aggregate_summary_payload(video, source_tasks)
     payload = json.dumps(
         {
-            "title": source_task.task_input.title or video.title,
-            "transcript": source_task.result.transcript_text,
+            "title": title,
+            "source_kind": "aggregate_series",
+            "transcript": transcript,
             "segments": segments,
         },
         ensure_ascii=False,
-    )
-    logger.info(
-        "create video resummary task video_id=%s source_task_id=%s title=%s",
-        video.video_id,
-        source_task.task_id,
-        source_task.task_input.title or video.title,
     )
     record = task_store.create_task(
         TaskInput(
             input_type=InputType.TRANSCRIPT_TEXT,
             source=payload,
-            title=source_task.task_input.title or video.title,
-            platform_hint=source_task.task_input.platform_hint,
-            options=source_task.task_input.options,
+            title=title,
+            platform_hint=video.platform,
         ),
         video_id=video.video_id,
-        page_number=source_task.page_number,
-        page_title=source_task.page_title or source_task.task_input.title or video.title,
+        page_number=AGGREGATE_SUMMARY_PAGE_NUMBER,
+        page_title=AGGREGATE_SUMMARY_PAGE_TITLE,
     )
     task_worker.submit(record)
     refreshed = task_store.get_task(record.task_id)
     assert refreshed is not None
     return refreshed.to_detail()
+
+
+@router.post("/{video_id}/tasks/batch", response_model=VideoTaskBatchResponse, status_code=status.HTTP_201_CREATED)
+def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request: Request) -> VideoTaskBatchResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    task_worker: TaskWorker = request.app.state.task_worker
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    page_numbers = _normalize_batch_page_numbers(video, body.page_numbers)
+    tasks = task_store.list_tasks_for_video(video_id)
+
+    conflict_pages: list[VideoTaskBatchPageResponse] = []
+    skipped_pages: list[VideoTaskBatchPageResponse] = []
+    created_tasks: list[TaskDetailResponse] = []
+    creatable_page_numbers: list[int] = []
+
+    for page_number in page_numbers:
+        page = resolve_video_page(video, page_number)
+        assert page is not None
+        existing_completed_task = _find_latest_completed_task_for_page(tasks, page_number)
+        if existing_completed_task is None:
+            creatable_page_numbers.append(page_number)
+            continue
+
+        conflict_pages.append(
+            VideoTaskBatchPageResponse(
+                page_number=page_number,
+                page_title=page.title,
+                action="skip",
+                reason="该分 P 已有成功摘要，批量生成将默认跳过。",
+                existing_task_id=existing_completed_task.task_id,
+                existing_status=existing_completed_task.status,
+                has_existing_result=True,
+            )
+        )
+
+    if conflict_pages and not body.confirm:
+        return VideoTaskBatchResponse(
+            operation="create",
+            requested_page_numbers=page_numbers,
+            requires_confirmation=True,
+            created_tasks=[],
+            skipped_pages=[],
+            conflict_pages=conflict_pages,
+        )
+
+    if conflict_pages:
+        skipped_pages.extend(conflict_pages)
+
+    for page_number in creatable_page_numbers:
+        refreshed = _create_video_task_record(
+            task_store=task_store,
+            task_worker=task_worker,
+            video=video,
+            page_number=page_number,
+        )
+        created_tasks.append(refreshed.to_detail())
+
+    return VideoTaskBatchResponse(
+        operation="create",
+        requested_page_numbers=page_numbers,
+        requires_confirmation=False,
+        created_tasks=created_tasks,
+        skipped_pages=skipped_pages,
+        conflict_pages=[],
+    )
+
+
+@router.post("/{video_id}/tasks/resummary/batch", response_model=VideoTaskBatchResponse, status_code=status.HTTP_201_CREATED)
+def create_video_resummary_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request: Request) -> VideoTaskBatchResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    task_worker: TaskWorker = request.app.state.task_worker
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    page_numbers = _normalize_batch_page_numbers(video, body.page_numbers)
+    conflict_pages: list[VideoTaskBatchPageResponse] = []
+    skipped_pages: list[VideoTaskBatchPageResponse] = []
+    created_tasks: list[TaskDetailResponse] = []
+
+    source_tasks_by_page = {
+        page_number: _find_resummary_source_task(
+            task_store,
+            video_id,
+            ResummaryRequest(page_number=page_number),
+        )
+        for page_number in page_numbers
+    }
+
+    for page_number in page_numbers:
+        page = resolve_video_page(video, page_number)
+        assert page is not None
+        source_task = source_tasks_by_page[page_number]
+        if source_task is None:
+            skipped_pages.append(
+                VideoTaskBatchPageResponse(
+                    page_number=page_number,
+                    page_title=page.title,
+                    action="skip",
+                    reason="该分 P 暂无可复用的转写与摘要结果。",
+                    has_existing_result=False,
+                )
+            )
+            continue
+
+        conflict_pages.append(
+            VideoTaskBatchPageResponse(
+                page_number=page_number,
+                page_title=page.title,
+                action="rerun",
+                reason="该分 P 已有成功摘要，确认后将复用转写重新生成摘要。",
+                existing_task_id=source_task.task_id,
+                existing_status=source_task.status,
+                has_existing_result=True,
+            )
+        )
+
+    if conflict_pages and not body.confirm:
+        return VideoTaskBatchResponse(
+            operation="resummary",
+            requested_page_numbers=page_numbers,
+            requires_confirmation=True,
+            created_tasks=[],
+            skipped_pages=skipped_pages,
+            conflict_pages=conflict_pages,
+        )
+
+    for page_number in page_numbers:
+        source_task = source_tasks_by_page[page_number]
+        if source_task is None:
+            continue
+        refreshed = _create_resummary_task_record(
+            task_store=task_store,
+            task_worker=task_worker,
+            video=video,
+            source_task=source_task,
+        )
+        created_tasks.append(refreshed.to_detail())
+
+    return VideoTaskBatchResponse(
+        operation="resummary",
+        requested_page_numbers=page_numbers,
+        requires_confirmation=False,
+        created_tasks=created_tasks,
+        skipped_pages=skipped_pages,
+        conflict_pages=[],
+    )

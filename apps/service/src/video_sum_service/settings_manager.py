@@ -13,6 +13,8 @@ from video_sum_infra.config import (
     PREVIOUS_DEFAULT_SUMMARY_SYSTEM_PROMPT,
     PREVIOUS_DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE,
     ServiceSettings,
+    recommend_mindmap_concurrency,
+    recommend_task_concurrency,
 )
 
 
@@ -51,6 +53,8 @@ class SettingsUpdatePayload(BaseModel):
     summary_user_prompt_template: str | None = None
     summary_chunk_target_chars: int | None = None
     summary_chunk_overlap_segments: int | None = None
+    task_concurrency: int | None = None
+    mindmap_concurrency: int | None = None
     summary_chunk_concurrency: int | None = None
     summary_chunk_retry_count: int | None = None
 
@@ -80,9 +84,28 @@ class SettingsManager:
                 stored["summary_user_prompt_template"] = DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE
             if stored.get("summary_user_prompt_template") == PREVIOUS_DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE:
                 stored["summary_user_prompt_template"] = DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE
+            migrated = False
+            candidate = ServiceSettings.model_validate({**self._base_settings.model_dump(), **stored})
+            if "task_concurrency" not in stored:
+                stored["task_concurrency"] = recommend_task_concurrency(candidate)
+                migrated = True
+            if "mindmap_concurrency" not in stored:
+                stored["mindmap_concurrency"] = recommend_mindmap_concurrency()
+                migrated = True
             self._settings = ServiceSettings.model_validate({**self._base_settings.model_dump(), **stored})
+            if migrated:
+                self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+                self._settings_path.write_text(
+                    json.dumps(self._settings.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
         else:
-            self._settings = self._base_settings
+            self._settings = self._base_settings.model_copy(
+                update={
+                    "task_concurrency": recommend_task_concurrency(self._base_settings),
+                    "mindmap_concurrency": recommend_mindmap_concurrency(),
+                }
+            )
         return self._settings
 
     def save(self, payload: SettingsUpdatePayload) -> ServiceSettings:
