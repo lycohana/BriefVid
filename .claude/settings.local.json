@@ -15,7 +15,10 @@
       "Bash(cd apps/desktop && npm run build 2>&1)",
       "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop && npm run build 2>&1)",
       "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop/src && sed -i 's/\"/\"/g App.tsx && sed -i 's/\"/\"/g App.tsx)",
-      "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop/src && python3 -c \"with open\\('App.tsx','rb'\\) as f: c=f.read\\(\\); c=c.replace\\(b'\\\\xe2\\\\x80\\\\x9c',b'\\\\\"'\\).replace\\(b'\\\\xe2\\\\x80\\\\x9d',b'\\\\\"'\\); open\\('App.tsx','wb'\\).write\\(c\\)\")"
+      "Bash(cd C:/Users/lycohana/Desktop/code/bilibili_sum/apps/desktop/src && python3 -c \"with open\\('App.tsx','rb'\\) as f: c=f.read\\(\\); c=c.replace\\(b'\\\\xe2\\\\x80\\\\x9c',b'\\\\\"'\\).replace\\(b'\\\\xe2\\\\x80\\\\x9d',b'\\\\\"'\\); open\\('App.tsx','wb'\\).write\\(c\\)\")",
+      "Bash(python -m py_compile packages/core/src/video_sum_core/pipeline/real.py)",
+      "Bash(uv run:*)",
+      "Bash(git -C /c/Users/lycohana/Desktop/code/bilibili_sum status)"
     ]
   }
 }

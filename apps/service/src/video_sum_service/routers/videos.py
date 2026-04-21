@@ -163,75 +163,100 @@ def _build_aggregate_summary_payload(
     title = f"{video.title}{AGGREGATE_SUMMARY_TITLE_SUFFIX}"
     transcript_parts: list[str] = []
     segments: list[dict[str, object]] = []
-    cursor = 0.0
 
-    for index, task in enumerate(source_tasks, start=1):
+    # 根据总 P 数动态调整每 P 的压缩限制
+    page_count = len(source_tasks)
+    if page_count <= 20:
+        overview_limit = 520
+        key_point_limit = 160
+        chapter_limit = 180
+        note_limit = 360
+        max_key_points_per_page = 8
+        max_chapters_per_page = 8
+    elif page_count <= 40:
+        overview_limit = 400
+        key_point_limit = 120
+        chapter_limit = 140
+        note_limit = 280
+        max_key_points_per_page = 6
+        max_chapters_per_page = 6
+    elif page_count <= 60:
+        overview_limit = 300
+        key_point_limit = 100
+        chapter_limit = 100
+        note_limit = 200
+        max_key_points_per_page = 4
+        max_chapters_per_page = 4
+    else:
+        overview_limit = 200
+        key_point_limit = 80
+        chapter_limit = 70
+        note_limit = 140
+        max_key_points_per_page = 3
+        max_chapters_per_page = 3
+
+    for task in source_tasks:
         result = task.result
         assert result is not None
         page_number = _task_page_number(task)
         page_title = task.page_title or task.task_input.title or f"P{page_number}"
         key_points = [
-            _compact_text(item, AGGREGATE_KEY_POINT_LIMIT)
+            _compact_text(item, key_point_limit)
             for item in result.key_points
             if str(item).strip()
-        ][:AGGREGATE_MAX_KEY_POINTS_PER_PAGE]
+        ][:max_key_points_per_page]
         timeline = [item for item in result.timeline if isinstance(item, dict)]
         segment_summaries = [
-            _compact_text(item, AGGREGATE_CHAPTER_LIMIT)
+            _compact_text(item, chapter_limit)
             for item in result.segment_summaries
             if str(item).strip()
         ]
-        note = _compact_text(result.knowledge_note_markdown, AGGREGATE_NOTE_LIMIT)
-        overview = _compact_text(result.overview, AGGREGATE_OVERVIEW_LIMIT)
+        note = _compact_text(result.knowledge_note_markdown, note_limit)
+        overview = _compact_text(result.overview, overview_limit)
 
         chapter_fragments: list[str] = []
-        for chapter in timeline[:AGGREGATE_MAX_CHAPTERS_PER_PAGE]:
+        for chapter in timeline[:max_chapters_per_page]:
             chapter_title = str(chapter.get("title") or "").strip() or "章节"
-            chapter_summary = _compact_text(chapter.get("summary"), AGGREGATE_CHAPTER_LIMIT)
+            chapter_summary = _compact_text(chapter.get("summary"), chapter_limit)
             if chapter_summary:
                 chapter_fragments.append(f"{chapter_title}：{chapter_summary}")
 
         section_lines = [f"## P{page_number} {page_title}"]
         if overview:
-            section_lines.append(f"概览：{overview}")
+            section_lines.append(f"[重点-概览] {overview}")
         if key_points:
-            section_lines.append(f"关键要点：{'；'.join(key_points)}")
+            section_lines.append(f"[重点-要点] {'；'.join(key_points)}")
         if chapter_fragments:
-            section_lines.append(f"章节摘要：{'；'.join(chapter_fragments)}")
+            section_lines.append(f"[重点-章节] {'；'.join(chapter_fragments)}")
         elif segment_summaries:
             section_lines.append(
-                f"片段摘要：{'；'.join(segment_summaries[:AGGREGATE_MAX_CHAPTERS_PER_PAGE])}"
+                f"[重点-片段] {'；'.join(segment_summaries[:max_chapters_per_page])}"
             )
         if note:
-            section_lines.append(f"补充笔记摘录：{note}")
+            section_lines.append(f"[重点-笔记] {note}")
 
         section_text = "\n".join(section_lines).strip()
         transcript_parts.append(section_text)
         segments.append(
             {
-                "start": cursor,
-                "end": cursor + 1,
+                "start": float(page_number),
+                "end": float(page_number),
                 "text": f"P{page_number} {page_title}：{overview or page_title}",
             }
         )
-        cursor += 1
 
-        for chapter in timeline[:AGGREGATE_MAX_CHAPTERS_PER_PAGE]:
-            chapter_summary = _compact_text(chapter.get("summary"), AGGREGATE_CHAPTER_LIMIT)
+        for chapter in timeline[:max_chapters_per_page]:
+            chapter_summary = _compact_text(chapter.get("summary"), chapter_limit)
             if not chapter_summary:
                 continue
             chapter_title = str(chapter.get("title") or "").strip() or "章节"
             segments.append(
                 {
-                    "start": cursor,
-                    "end": cursor + 1,
+                    "start": float(page_number),
+                    "end": float(page_number),
                     "text": f"P{page_number} {page_title} - {chapter_title}\n{chapter_summary}",
                 }
             )
-            cursor += 1
-
-        if index < len(source_tasks):
-            cursor += 1
 
     return title, "\n\n".join(transcript_parts).strip(), segments
 
@@ -568,6 +593,7 @@ def create_video_aggregate_summary_task(
     payload = json.dumps(
         {
             "title": title,
+            "source_kind": "aggregate_series",
             "transcript": transcript,
             "segments": segments,
         },

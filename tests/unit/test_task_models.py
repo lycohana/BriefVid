@@ -286,6 +286,22 @@ def test_llm_payload_forces_json_keyword_when_custom_prompts_miss_it() -> None:
     assert "json" in contents.lower()
 
 
+def test_aggregate_series_prompt_uses_page_anchors_instead_of_timestamps() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    payload = runner._build_aggregate_series_summary_payload(
+        "测试合集｜全集总结",
+        "## P1 开场\n[重点-概览] 开场摘要",
+        '[{"page":1,"label":"P1 开场"}]',
+    )
+    contents = "\n".join(str(message.get("content") or "") for message in payload["messages"])
+
+    assert "全集总结" in contents
+    assert "start 必须是该主题最适合跳转的分 P 数字" in contents
+    assert "禁止使用时间戳" in contents
+    assert "每个分 P 至少保留一个高价值信息点" in contents
+
+
 def test_knowledge_note_payload_forces_json_keyword() -> None:
     runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
 
@@ -293,6 +309,23 @@ def test_knowledge_note_payload_forces_json_keyword() -> None:
     contents = "\n".join(str(message.get("content") or "") for message in payload["messages"])
 
     assert "json" in contents.lower()
+
+
+def test_aggregate_series_note_prompt_uses_page_positioning() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    payload = runner._build_llm_knowledge_note_payload(
+        "测试合集｜全集总结",
+        "## P1 开场\n[重点-概览] 开场摘要",
+        '[{"page":1,"label":"P1 开场"}]',
+        '{"overview":"概览"}',
+        source_kind="aggregate_series",
+    )
+    contents = "\n".join(str(message.get("content") or "") for message in payload["messages"])
+
+    assert "所有定位都使用 P 数" in contents
+    assert "不要写时间戳" in contents
+    assert "回看路径" in contents
 
 
 def test_export_result_preserves_llm_usage() -> None:

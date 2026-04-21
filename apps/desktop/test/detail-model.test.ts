@@ -124,6 +124,24 @@ run("builds page batch status without counting aggregate summary tasks", () => {
   assert.equal(options[1].aggregate_status, "not_started");
 });
 
+run("builds aggregate chapter cards with page anchors instead of timestamps", () => {
+  const cards = buildKnowledgeCards(
+    createTaskResult({
+      timeline: [
+        { title: "主题一", start: 1, summary: "主题一摘要" },
+        { title: "主题二", start: 3, summary: "主题二摘要" },
+      ],
+    }),
+    { chapterAnchor: "page" },
+  );
+  const chapters = cards.filter((item) => item.kind === "chapter");
+
+  assert.equal(chapters[0].timestampSeconds, null);
+  assert.equal(chapters[0].pageNumber, 1);
+  assert.equal(chapters[0].anchorLabel, "P1");
+  assert.equal(chapters[1].pageNumber, 3);
+});
+
 run("builds overview, key point, and chapter cards from a completed result", () => {
   const cards = buildKnowledgeCards(createTaskResult());
 

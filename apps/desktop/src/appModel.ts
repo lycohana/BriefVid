@@ -319,9 +319,9 @@ export function stageLabel(stage?: string | null) {
     summarizing: "总结中",
     mindmap_queued: "导图待生成",
     mindmap_llm_request: "调用 LLM 中",
-    mindmap_generating: "思维导图生成中",
-    mindmap_completed: "思维导图已完成",
-    mindmap_failed: "思维导图失败",
+    mindmap_generating: "导图生成中",
+    mindmap_completed: "导图完成",
+    mindmap_failed: "导图失败",
     completed: "已完成",
     failed: "失败",
   };

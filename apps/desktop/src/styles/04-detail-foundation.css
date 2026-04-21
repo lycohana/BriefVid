@@ -547,7 +547,7 @@
 .detail-mindmap-inspector-hint {
   display: grid;
   gap: 12px;
-  padding: 18px 20px;
+  padding: 18px 24px;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-card) 92%, white 8%);
@@ -629,7 +629,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 10px 16px;
   border: 1px solid var(--accent-border);
   border-radius: 999px;
   background: linear-gradient(180deg, var(--bg-accent), var(--bg-card));

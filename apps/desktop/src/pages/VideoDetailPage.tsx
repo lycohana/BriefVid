@@ -91,6 +91,7 @@ type MindMapFlowNodeData = {
   selected: boolean;
   muted: boolean;
   timeAnchor?: number | null;
+  pageAnchorLabel?: string;
   sourceChapterTitles: string[];
   sourceChapterStarts: number[];
   accent: MindMapAccent;
@@ -230,6 +231,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   const [isExportingKnowledgeCard, setIsExportingKnowledgeCard] = useState(false);
   const [expandedChapterGroupIds, setExpandedChapterGroupIds] = useState<string[]>([]);
   const [selectedPageNumber, setSelectedPageNumber] = useState<number | null>(null);
+  const [jumpConfirmPopover, setJumpConfirmPopover] = useState<{ open: boolean; pageNumber: number; title: string; x: number; y: number } | null>(null);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchDialogMode, setBatchDialogMode] = useState<"create" | "resummary">("create");
   const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
@@ -822,11 +824,17 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
     return describeMindMapWorkspace(selectedTaskDetail, selectedMindMap);
   }, [isSelectedTaskLoading, selectedMindMap, selectedTaskDetail, selectedTaskLoadError]);
-  const knowledgeCards = useMemo(() => buildKnowledgeCards(selectedResult), [selectedResult]);
+  const knowledgeCards = useMemo(
+    () => buildKnowledgeCards(selectedResult, { chapterAnchor: isAggregateSummaryView ? "page" : "time" }),
+    [isAggregateSummaryView, selectedResult],
+  );
   const overviewCard = knowledgeCards.find((item) => item.kind === "overview") ?? null;
   const keyPointCards = knowledgeCards.filter((item) => item.kind === "key-point");
   const chapterCards = knowledgeCards.filter((item) => item.kind === "chapter");
-  const chapterGroups = useMemo(() => buildChapterGroups(chapterCards, selectedResult), [chapterCards, selectedResult]);
+  const chapterGroups = useMemo(
+    () => buildChapterGroups(chapterCards, selectedResult, { chapterAnchor: isAggregateSummaryView ? "page" : "time" }),
+    [chapterCards, isAggregateSummaryView, selectedResult],
+  );
   const areAllChapterGroupsExpanded = chapterGroups.length > 0 && expandedChapterGroupIds.length === chapterGroups.length;
   const selectedKnowledgeNoteMarkdown = useMemo(() => resolveKnowledgeNoteMarkdown(selectedResult), [selectedResult]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
@@ -947,8 +955,12 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     return readyMindMap.nodes.find((node) => node.id === readyMindMap.root) ?? readyMindMap.nodes[0] ?? null;
   }, [readyMindMap]);
   const mindMapFlow = useMemo(
-    () => (readyMindMapRoot ? buildMindMapFlow(readyMindMapRoot, selectedMindMapNodeId) : { nodes: [], edges: [] }),
-    [readyMindMapRoot, selectedMindMapNodeId],
+    () => (
+      readyMindMapRoot
+        ? buildMindMapFlow(readyMindMapRoot, selectedMindMapNodeId, isAggregateSummaryView ? "page" : "time")
+        : { nodes: [], edges: [] }
+    ),
+    [isAggregateSummaryView, readyMindMapRoot, selectedMindMapNodeId],
   );
   const selectedMindMapNode = useMemo(() => {
     if (!readyMindMapRoot || !selectedMindMapNodeId) {
@@ -1001,6 +1013,58 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
+
+  function handleJumpToPageSummary(event: React.MouseEvent, pageNumber: number | null) {
+    if (pageNumber == null) {
+      return;
+    }
+    const page = availablePages.find((item) => item.page === pageNumber);
+    if (!page) {
+      setStatus(`没有找到 P${pageNumber} 对应的分 P。`);
+      return;
+    }
+    // 在点击位置显示确认悬浮窗
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setJumpConfirmPopover({
+      open: true,
+      pageNumber,
+      title: page.title,
+      x: rect.left + rect.width / 2,
+      y: rect.bottom + 8,
+    });
+  }
+
+  function handleConfirmJump() {
+    if (!jumpConfirmPopover) return;
+    setSelectedPageNumber(jumpConfirmPopover.pageNumber);
+    setActiveTab("knowledge");
+    setPageMenuOpen(false);
+    setJumpConfirmPopover(null);
+    setStatus(`已跳转到 P${jumpConfirmPopover.pageNumber}「${jumpConfirmPopover.title}」`);
+  }
+
+  function handleCancelJump() {
+    setJumpConfirmPopover(null);
+  }
+
+  function handleDismissJumpPopover() {
+    setJumpConfirmPopover(null);
+  }
+
+  // 点击页面其他地方关闭悬浮窗
+  useEffect(() => {
+    if (!jumpConfirmPopover?.open) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.jump-confirm-popover') && !target.closest('[data-jump-anchor]')) {
+        setJumpConfirmPopover(null);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [jumpConfirmPopover?.open]);
 
   function handleToggleAllChapterGroups() {
     setExpandedChapterGroupIds(areAllChapterGroupsExpanded ? [] : chapterGroups.map((group) => group.id));
@@ -1144,6 +1208,36 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   return (
     <section className="video-detail-page">
       <FloatingNoticeStack notices={[{ id: "video-detail-status", message: status }]} />
+
+      {/* 分 P 跳转确认悬浮窗 */}
+      {jumpConfirmPopover?.open && (
+        <div
+          className="jump-confirm-popover"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            left: jumpConfirmPopover.x,
+            top: jumpConfirmPopover.y,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className="jump-confirm-popover-arrow" aria-hidden="true"></div>
+          <div className="jump-confirm-popover-content">
+            <p className="jump-confirm-popover-message">
+              跳转到 P{jumpConfirmPopover.pageNumber}「{jumpConfirmPopover.title}」？
+            </p>
+            <div className="jump-confirm-popover-actions">
+              <button className="jump-confirm-popover-cancel" onClick={handleCancelJump} type="button">
+                取消
+              </button>
+              <button className="jump-confirm-popover-ok" onClick={handleConfirmJump} type="button">
+                跳转
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="detail-page-shell">
         <div className="detail-page-toolbar">
           <Link className="detail-back-button" to="/library">
@@ -1955,7 +2049,8 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                       card={card}
                                       index={index}
                                       key={card.id}
-                                      onSeekToTimestamp={hasSeekablePlayer ? handleSeekToChapter : undefined}
+                                      onJumpToPage={isAggregateSummaryView ? handleJumpToPageSummary : undefined}
+                                      onSeekToTimestamp={!isAggregateSummaryView && hasSeekablePlayer ? handleSeekToChapter : undefined}
                                     />
                                   ))}
                                 </div>
@@ -2042,7 +2137,17 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                 <span className="detail-mindmap-inspector-kicker">{formatMindMapNodeType(selectedMindMapNode.type)}</span>
                                 <h4>{sanitizeMindMapLabel(selectedMindMapNode.label, selectedMindMapNode.summary)}</h4>
                               </div>
-                              {shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && hasSeekablePlayer ? (
+                              {isAggregateSummaryView && shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) ? (
+                                <button
+                                  className="detail-mindmap-seek-button"
+                                  type="button"
+                                  data-jump-anchor
+                                  onClick={(event) => handleJumpToPageSummary(event, Math.round(selectedMindMapNode.time_anchor ?? 0))}
+                                >
+                                  <IconArrowRight className="detail-mindmap-seek-icon" />
+                                  查看 P{Math.round(selectedMindMapNode.time_anchor ?? 0)} 总结
+                                </button>
+                              ) : shouldDisplayMindMapTimestamp(selectedMindMapNode.time_anchor) && hasSeekablePlayer ? (
                                 <button
                                   className="detail-mindmap-seek-button"
                                   type="button"
@@ -2060,16 +2165,26 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               <div className="detail-mindmap-inspector-tags">
                                 {selectedMindMapNode.source_chapter_titles.slice(0, 3).map((title: string, index: number) => {
                                   const timestamp = selectedMindMapNode.source_chapter_starts[index] ?? null;
-                                  const canSeek = shouldDisplayMindMapTimestamp(timestamp) && hasSeekablePlayer;
-                                  const label = `${title}${shouldDisplayMindMapTimestamp(timestamp) ? ` · ${formatDuration(timestamp!)}` : ""}`;
+                                  const canJumpToPage = isAggregateSummaryView && shouldDisplayMindMapTimestamp(timestamp);
+                                  const canSeek = !isAggregateSummaryView && shouldDisplayMindMapTimestamp(timestamp) && hasSeekablePlayer;
+                                  const anchorLabel = canJumpToPage
+                                    ? `P${Math.round(timestamp!)}`
+                                    : shouldDisplayMindMapTimestamp(timestamp)
+                                      ? formatDuration(timestamp!)
+                                      : "";
+                                  const label = `${title}${anchorLabel ? ` · ${anchorLabel}` : ""}`;
 
-                                  if (canSeek) {
+                                  if (canJumpToPage || canSeek) {
                                     return (
                                       <button
                                         className="detail-mindmap-inspector-tag is-action"
                                         key={`${title}-${index}`}
                                         type="button"
-                                        onClick={() => handleSeekToChapter(timestamp)}
+                                        onClick={(event) => (
+                                          canJumpToPage
+                                            ? handleJumpToPageSummary(event, Math.round(timestamp!))
+                                            : handleSeekToChapter(timestamp)
+                                        )}
                                       >
                                         {label}
                                       </button>
@@ -2190,39 +2305,54 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
 function KnowledgeCardBlock({
   card,
   index,
+  onJumpToPage,
   onSeekToTimestamp,
 }: {
   card: KnowledgeCard;
   index: number;
+  onJumpToPage?: (event: React.MouseEvent, pageNumber: number | null) => void;
   onSeekToTimestamp?: (seconds: number | null) => void;
 }) {
   if (card.kind === "chapter") {
     const canSeek = typeof card.timestampSeconds === "number" && Boolean(onSeekToTimestamp);
+    const canJumpToPage = typeof card.pageNumber === "number" && Boolean(onJumpToPage);
+    const isActionable = canSeek || canJumpToPage;
     const chapterCardBody = (
       <div className="detail-chapter-node-shell">
         <span className="detail-chapter-node-dot" aria-hidden="true" />
         <div className="detail-chapter-node-meta">
           <div className="detail-chapter-time">
-            <IconClock className="detail-inline-icon" />
-            <span>{card.timestampSeconds != null ? formatDuration(card.timestampSeconds) : "--"}</span>
+            {card.anchorLabel ? <IconFileText className="detail-inline-icon" /> : <IconClock className="detail-inline-icon" />}
+            <span>{card.anchorLabel || (card.timestampSeconds != null ? formatDuration(card.timestampSeconds) : "--")}</span>
           </div>
         </div>
         <div className="detail-chapter-node-copy">
           <h4>{card.title}</h4>
           <MarkdownContent className="detail-card-markdown" compact content={card.content} />
         </div>
-        {canSeek ? (
+        {isActionable ? (
           <div className="detail-card-link">
-            定位片段
+            {canJumpToPage ? "查看分 P 总结" : "定位片段"}
             <IconArrowRight className="detail-inline-icon" />
           </div>
         ) : null}
       </div>
     );
 
-    if (canSeek) {
+    if (isActionable) {
       return (
-        <button className="detail-chapter-node detail-chapter-node-action" type="button" onClick={() => onSeekToTimestamp!(card.timestampSeconds ?? null)}>
+        <button
+          className="detail-chapter-node detail-chapter-node-action"
+          type="button"
+          data-jump-anchor
+          onClick={(event) => {
+            if (canJumpToPage) {
+              onJumpToPage!(event, card.pageNumber ?? null);
+              return;
+            }
+            onSeekToTimestamp!(card.timestampSeconds ?? null);
+          }}
+        >
           {chapterCardBody}
         </button>
       );
@@ -2452,7 +2582,11 @@ function layoutMindMap(root: MindMapNode): MindMapCanvasNode[] {
   }));
 }
 
-function buildMindMapFlow(root: MindMapNode, selectedNodeId: string | null): { nodes: FlowNode<MindMapFlowNodeData>[]; edges: Edge[] } {
+function buildMindMapFlow(
+  root: MindMapNode,
+  selectedNodeId: string | null,
+  anchorMode: "time" | "page" = "time",
+): { nodes: FlowNode<MindMapFlowNodeData>[]; edges: Edge[] } {
   const positioned = layoutMindMap(root);
   const focusIds = getMindMapFocusIds(positioned, selectedNodeId);
   const hasFocus = Boolean(focusIds?.size);
@@ -2482,6 +2616,9 @@ function buildMindMapFlow(root: MindMapNode, selectedNodeId: string | null): { n
         selected,
         muted,
         timeAnchor: item.node.time_anchor ?? null,
+        pageAnchorLabel: anchorMode === "page" && shouldDisplayMindMapTimestamp(item.node.time_anchor)
+          ? `P${Math.round(item.node.time_anchor ?? 0)}`
+          : undefined,
         sourceChapterTitles: item.node.source_chapter_titles,
         sourceChapterStarts: item.node.source_chapter_starts,
         accent: item.accent,
@@ -2558,7 +2695,11 @@ function MindMapFlowNode({ data }: NodeProps<FlowNode<MindMapFlowNodeData>>) {
       )}
       <div className="detail-mindmap-node-head">
         <MarkdownContent className="detail-mindmap-node-label" compact content={displayLabel} />
-        {shouldDisplayMindMapTimestamp(data.timeAnchor) ? <small>{formatDuration(data.timeAnchor)}</small> : null}
+        {data.pageAnchorLabel ? (
+          <small>{data.pageAnchorLabel}</small>
+        ) : shouldDisplayMindMapTimestamp(data.timeAnchor) ? (
+          <small>{formatDuration(data.timeAnchor)}</small>
+        ) : null}
       </div>
     </div>
   );

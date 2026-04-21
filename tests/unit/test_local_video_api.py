@@ -265,11 +265,14 @@ def test_create_video_aggregate_summary_uses_only_completed_pages_by_default() -
     assert submitted.page_number == 0
     assert submitted.page_title == "全集总结"
     assert payload["title"] == "测试合集｜全集总结"
+    assert payload["source_kind"] == "aggregate_series"
     assert "P1 开场 overview" in payload["transcript"]
     assert "P2 正片 key point" in payload["transcript"]
+    assert "[重点-概览]" in payload["transcript"]
     assert "[00:00] hello" not in payload["transcript"]
     assert "转写文本" not in payload["transcript"]
     assert "P3 未完成" not in payload["transcript"]
+    assert payload["segments"][0]["start"] == 1.0
     assert any("P1 开场 chapter summary" in item["text"] for item in payload["segments"])
 
 

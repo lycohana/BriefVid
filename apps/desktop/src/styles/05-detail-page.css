@@ -8,6 +8,84 @@
   --detail-copy-muted: color-mix(in srgb, var(--text-secondary) 96%, var(--text-tertiary) 4%);
 }
 
+/* 分 P 跳转确认悬浮窗 */
+.jump-confirm-popover {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--bg-base) 6%);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px);
+  transform-origin: top center;
+  animation: detail-popover-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  min-width: 260px;
+  max-width: 320px;
+}
+
+.jump-confirm-popover-arrow {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 12px;
+  height: 12px;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--bg-base) 6%);
+  border-left: 1px solid var(--border-default);
+  border-top: 1px solid var(--border-default);
+}
+
+.jump-confirm-popover-content {
+  display: grid;
+  gap: 10px;
+}
+
+.jump-confirm-popover-message {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.jump-confirm-popover-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.jump-confirm-popover-cancel,
+.jump-confirm-popover-ok {
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: none;
+}
+
+.jump-confirm-popover-cancel {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.jump-confirm-popover-cancel:hover {
+  background: var(--bg-subtle-hover);
+  color: var(--text-primary);
+}
+
+.jump-confirm-popover-ok {
+  background: var(--detail-accent);
+  color: white;
+}
+
+.jump-confirm-popover-ok:hover {
+  background: var(--detail-accent-strong);
+}
+
 .detail-page-shell {
   width: min(1180px, 100%);
   margin: 0 auto;
@@ -1081,11 +1159,11 @@
 }
 
 .detail-task-section-kicker {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .detail-task-section-count {
@@ -1375,11 +1453,11 @@
 
 .detail-workspace-label {
   margin: 0;
-  font-size: 0.84rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--detail-kicker);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .detail-workspace-meta {
@@ -1730,11 +1808,11 @@
 
 .detail-section-label {
   margin: 0;
-  font-size: 0.84rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--detail-kicker);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .detail-section-meta {
@@ -1804,9 +1882,11 @@
 
 .detail-section-title {
   margin: 0;
-  font-size: 1.4rem;
-  font-weight: 600;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
+  line-height: 1.2;
 }
 
 .detail-section-body {
