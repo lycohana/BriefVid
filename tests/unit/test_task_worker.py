@@ -222,6 +222,10 @@ def test_worker_limits_summary_task_concurrency() -> None:
     second_running = [task_id for task_id in runner.started if repository.get_task(task_id).status == TaskStatus.RUNNING]
     assert len(second_running) == 1
 
+    second_task_id = [task_id for task_id in runner.started if task_id != first_task_id][0]
+    runner.release(second_task_id)
+    wait_for(lambda: len(runner.started) == 3)
+
     for task_id in runner.started:
         runner.release(task_id)
     wait_for(lambda: all(repository.get_task(record.task_id).status == TaskStatus.COMPLETED for record in records))
