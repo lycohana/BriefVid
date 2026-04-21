@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 
-import { buildChapterGroups, buildKnowledgeCards, describeMindMapWorkspace, describeTaskContentState, describeUserFacingErrorMessage, pickDetailTaskId, resolveKnowledgeNoteMarkdown } from "../src/detailModel.ts";
-import type { TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary } from "../src/types.ts";
+import {
+  buildChapterGroups,
+  buildKnowledgeCards,
+  buildVideoPageBatchOptions,
+  describeMindMapWorkspace,
+  describeTaskContentState,
+  describeUserFacingErrorMessage,
+  filterTasksForPage,
+  pickDetailTaskId,
+  resolveKnowledgeNoteMarkdown,
+  taskPageLabel,
+} from "../src/detailModel.ts";
+import type { TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, VideoPageOption } from "../src/types.ts";
 
 function run(name: string, fn: () => void) {
   fn();
@@ -79,6 +90,38 @@ run("keeps the preferred task when it still exists", () => {
   ];
 
   assert.equal(pickDetailTaskId(tasks, "task-running"), "task-running");
+});
+
+run("labels aggregate summary tasks without showing P0", () => {
+  const task = createTaskSummary({ task_id: "task-aggregate", page_number: 0, page_title: "全集总结" });
+
+  assert.equal(taskPageLabel(task), "全集总结");
+});
+
+run("filters aggregate summary tasks away from normal P1 history", () => {
+  const tasks = [
+    createTaskSummary({ task_id: "task-aggregate", page_number: 0, page_title: "全集总结" }),
+    createTaskSummary({ task_id: "task-p1", page_number: 1 }),
+  ];
+
+  assert.deepEqual(filterTasksForPage(tasks, 1).map((task) => task.task_id), ["task-p1"]);
+  assert.deepEqual(filterTasksForPage(tasks, 0).map((task) => task.task_id), ["task-aggregate"]);
+});
+
+run("builds page batch status without counting aggregate summary tasks", () => {
+  const pages: VideoPageOption[] = [
+    { page: 1, title: "P1", source_url: "https://example.com?p=1", cover_url: "" },
+    { page: 2, title: "P2", source_url: "https://example.com?p=2", cover_url: "" },
+  ];
+  const tasks = [
+    createTaskSummary({ task_id: "task-aggregate", status: "completed", page_number: 0, page_title: "全集总结" }),
+    createTaskSummary({ task_id: "task-p1", status: "completed", page_number: 1 }),
+  ];
+
+  const options = buildVideoPageBatchOptions(pages, tasks);
+
+  assert.equal(options[0].aggregate_status, "completed");
+  assert.equal(options[1].aggregate_status, "not_started");
 });
 
 run("builds overview, key point, and chapter cards from a completed result", () => {

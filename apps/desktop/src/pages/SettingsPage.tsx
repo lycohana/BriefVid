@@ -1818,7 +1818,11 @@ export function SettingsPage({
                   <div className="settings-tasklist-item-top">
                     <div className="settings-tasklist-item-meta">
                       <span className={`task-status ${taskStatusClass(task.status)}`}>{taskStatusLabel(task.status)}</span>
-                      {task.page_number ? <span className="helper-chip">P{task.page_number}</span> : null}
+                      {task.page_number === 0 ? (
+                        <span className="helper-chip">{task.page_title || "全集总结"}</span>
+                      ) : task.page_number ? (
+                        <span className="helper-chip">P{task.page_number}</span>
+                      ) : null}
                       <span className="helper-chip">{task.input_type}</span>
                     </div>
                     <span className="task-history-id">{task.task_id.slice(0, 8)}</span>

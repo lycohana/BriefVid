@@ -11,6 +11,7 @@ from video_sum_core.models.tasks import InputType, TaskInput
 from video_sum_service.context import LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import (
+    AggregateSummaryRequest,
     ResummaryRequest,
     TaskDetailResponse,
     TaskSummaryResponse,
@@ -37,6 +38,15 @@ from video_sum_service.video_assets import (
 from video_sum_service.worker import TaskWorker
 
 router = APIRouter(prefix="/api/v1/videos")
+AGGREGATE_SUMMARY_PAGE_NUMBER = 0
+AGGREGATE_SUMMARY_PAGE_TITLE = "全集总结"
+AGGREGATE_SUMMARY_TITLE_SUFFIX = "｜全集总结"
+AGGREGATE_OVERVIEW_LIMIT = 520
+AGGREGATE_KEY_POINT_LIMIT = 160
+AGGREGATE_CHAPTER_LIMIT = 180
+AGGREGATE_NOTE_LIMIT = 360
+AGGREGATE_MAX_KEY_POINTS_PER_PAGE = 8
+AGGREGATE_MAX_CHAPTERS_PER_PAGE = 8
 
 
 def _normalize_batch_page_numbers(video: VideoAssetRecord, page_numbers: list[int]) -> list[int]:
@@ -68,13 +78,19 @@ def _find_latest_completed_task_for_page(tasks, page_number: int):
         (
             task
             for task in tasks
-            if (task.page_number or 1) == page_number and task.status.value == "completed" and task.result is not None
+            if (task.page_number if task.page_number is not None else 1) == page_number
+            and task.status.value == "completed"
+            and task.result is not None
         ),
         None,
     )
 
 
-def _find_resummary_source_task(task_store: SqliteTaskRepository, video_id: str, body: ResummaryRequest):
+def _find_resummary_source_task(
+    task_store: SqliteTaskRepository,
+    video_id: str,
+    body: ResummaryRequest,
+):
     source_task = task_store.get_task(body.task_id) if body.task_id else None
     if source_task is None:
         source_task = next(
@@ -85,12 +101,139 @@ def _find_resummary_source_task(task_store: SqliteTaskRepository, video_id: str,
                     task.result
                     and task.result.transcript_text.strip()
                     and task.result.artifacts.get("summary_path")
-                    and (body.page_number is None or (task.page_number or 1) == body.page_number)
+                    and (
+                        body.page_number is None
+                        or _task_page_number(task) == body.page_number
+                    )
                 )
             ),
             None,
         )
     return source_task
+
+
+def _task_page_number(task) -> int:
+    return task.page_number if task.page_number is not None else 1
+
+
+def _compact_text(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _has_aggregate_summary_material(result) -> bool:
+    return bool(
+        str(result.overview or "").strip()
+        or any(str(item).strip() for item in result.key_points)
+        or any(str(item).strip() for item in result.segment_summaries)
+        or any(isinstance(item, dict) and str(item.get("summary") or "").strip() for item in result.timeline)
+        or str(result.knowledge_note_markdown or "").strip()
+    )
+
+
+def _select_aggregate_source_tasks(video: VideoAssetRecord, tasks, page_numbers: list[int] | None):
+    requested_pages = set(page_numbers) if page_numbers is not None else None
+    page_titles = {page.page: page.title for page in video.pages}
+    latest_completed_by_page = {}
+    for task in tasks:
+        page_number = _task_page_number(task)
+        if page_number <= 0:
+            continue
+        if requested_pages is not None and page_number not in requested_pages:
+            continue
+        if task.status.value != "completed" or task.result is None:
+            continue
+        if not _has_aggregate_summary_material(task.result):
+            continue
+        if page_number not in page_titles:
+            continue
+        latest_completed_by_page.setdefault(page_number, task)
+    return [
+        latest_completed_by_page[page_number]
+        for page_number in sorted(latest_completed_by_page)
+    ]
+
+
+def _build_aggregate_summary_payload(
+    video: VideoAssetRecord,
+    source_tasks,
+) -> tuple[str, str, list[dict[str, object]]]:
+    title = f"{video.title}{AGGREGATE_SUMMARY_TITLE_SUFFIX}"
+    transcript_parts: list[str] = []
+    segments: list[dict[str, object]] = []
+    cursor = 0.0
+
+    for index, task in enumerate(source_tasks, start=1):
+        result = task.result
+        assert result is not None
+        page_number = _task_page_number(task)
+        page_title = task.page_title or task.task_input.title or f"P{page_number}"
+        key_points = [
+            _compact_text(item, AGGREGATE_KEY_POINT_LIMIT)
+            for item in result.key_points
+            if str(item).strip()
+        ][:AGGREGATE_MAX_KEY_POINTS_PER_PAGE]
+        timeline = [item for item in result.timeline if isinstance(item, dict)]
+        segment_summaries = [
+            _compact_text(item, AGGREGATE_CHAPTER_LIMIT)
+            for item in result.segment_summaries
+            if str(item).strip()
+        ]
+        note = _compact_text(result.knowledge_note_markdown, AGGREGATE_NOTE_LIMIT)
+        overview = _compact_text(result.overview, AGGREGATE_OVERVIEW_LIMIT)
+
+        chapter_fragments: list[str] = []
+        for chapter in timeline[:AGGREGATE_MAX_CHAPTERS_PER_PAGE]:
+            chapter_title = str(chapter.get("title") or "").strip() or "章节"
+            chapter_summary = _compact_text(chapter.get("summary"), AGGREGATE_CHAPTER_LIMIT)
+            if chapter_summary:
+                chapter_fragments.append(f"{chapter_title}：{chapter_summary}")
+
+        section_lines = [f"## P{page_number} {page_title}"]
+        if overview:
+            section_lines.append(f"概览：{overview}")
+        if key_points:
+            section_lines.append(f"关键要点：{'；'.join(key_points)}")
+        if chapter_fragments:
+            section_lines.append(f"章节摘要：{'；'.join(chapter_fragments)}")
+        elif segment_summaries:
+            section_lines.append(
+                f"片段摘要：{'；'.join(segment_summaries[:AGGREGATE_MAX_CHAPTERS_PER_PAGE])}"
+            )
+        if note:
+            section_lines.append(f"补充笔记摘录：{note}")
+
+        section_text = "\n".join(section_lines).strip()
+        transcript_parts.append(section_text)
+        segments.append(
+            {
+                "start": cursor,
+                "end": cursor + 1,
+                "text": f"P{page_number} {page_title}：{overview or page_title}",
+            }
+        )
+        cursor += 1
+
+        for chapter in timeline[:AGGREGATE_MAX_CHAPTERS_PER_PAGE]:
+            chapter_summary = _compact_text(chapter.get("summary"), AGGREGATE_CHAPTER_LIMIT)
+            if not chapter_summary:
+                continue
+            chapter_title = str(chapter.get("title") or "").strip() or "章节"
+            segments.append(
+                {
+                    "start": cursor,
+                    "end": cursor + 1,
+                    "text": f"P{page_number} {page_title} - {chapter_title}\n{chapter_summary}",
+                }
+            )
+            cursor += 1
+
+        if index < len(source_tasks):
+            cursor += 1
+
+    return title, "\n\n".join(transcript_parts).strip(), segments
 
 
 def _create_video_task_record(
@@ -388,6 +531,62 @@ def create_video_resummary_task(video_id: str, body: ResummaryRequest, request: 
         video=video,
         source_task=source_task,
     )
+    return refreshed.to_detail()
+
+
+@router.post(
+    "/{video_id}/tasks/aggregate-summary",
+    response_model=TaskDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_video_aggregate_summary_task(
+    video_id: str,
+    request: Request,
+    body: AggregateSummaryRequest | None = None,
+) -> TaskDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    task_worker: TaskWorker = request.app.state.task_worker
+    video = task_store.get_video_asset(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    if not video.pages:
+        raise HTTPException(status_code=400, detail="当前视频不是多 P 视频，无法生成全集总结。")
+
+    requested_pages = body.page_numbers if body and body.page_numbers is not None else None
+    if requested_pages is not None:
+        _normalize_batch_page_numbers(video, requested_pages)
+
+    source_tasks = _select_aggregate_source_tasks(
+        video,
+        task_store.list_tasks_for_video(video_id),
+        requested_pages,
+    )
+    if not source_tasks:
+        raise HTTPException(status_code=400, detail="还没有可汇总的分 P 摘要，请先生成至少一个分 P 摘要。")
+
+    title, transcript, segments = _build_aggregate_summary_payload(video, source_tasks)
+    payload = json.dumps(
+        {
+            "title": title,
+            "transcript": transcript,
+            "segments": segments,
+        },
+        ensure_ascii=False,
+    )
+    record = task_store.create_task(
+        TaskInput(
+            input_type=InputType.TRANSCRIPT_TEXT,
+            source=payload,
+            title=title,
+            platform_hint=video.platform,
+        ),
+        video_id=video.video_id,
+        page_number=AGGREGATE_SUMMARY_PAGE_NUMBER,
+        page_title=AGGREGATE_SUMMARY_PAGE_TITLE,
+    )
+    task_worker.submit(record)
+    refreshed = task_store.get_task(record.task_id)
+    assert refreshed is not None
     return refreshed.to_detail()
 
 

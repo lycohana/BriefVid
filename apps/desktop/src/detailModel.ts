@@ -1,4 +1,4 @@
-import type { TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem } from "./types";
+import type { PageAggregateStatus, TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem, VideoPageBatchOption, VideoPageOption } from "./types";
 
 export type DetailTab = "knowledge" | "summary" | "mindmap";
 export type TaskPanelState = "collapsed" | "expanded";
@@ -35,6 +35,60 @@ export type MindMapWorkspaceState = {
   actionLabel?: string;
   actionEnabled?: boolean;
 };
+
+export const AGGREGATE_SUMMARY_PAGE_NUMBER = 0;
+
+export function getTaskPageNumber(task: Pick<TaskSummary, "page_number">): number {
+  return task.page_number ?? 1;
+}
+
+export function isAggregateSummaryTask(task: Pick<TaskSummary, "page_number">): boolean {
+  return task.page_number === AGGREGATE_SUMMARY_PAGE_NUMBER;
+}
+
+export function taskPageLabel(task: Pick<TaskSummary, "page_number" | "page_title">): string {
+  if (isAggregateSummaryTask(task)) {
+    return task.page_title || "全集总结";
+  }
+  return task.page_number ? `P${task.page_number}` : "";
+}
+
+export function derivePageAggregateStatus(tasks: TaskSummary[]): PageAggregateStatus {
+  if (tasks.some((task) => task.status === "running" || task.status === "queued")) {
+    return "in_progress";
+  }
+  if (tasks.some((task) => task.status === "completed")) {
+    return "completed";
+  }
+  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled")) {
+    return "failed";
+  }
+  return "not_started";
+}
+
+export function buildVideoPageBatchOptions(pages: VideoPageOption[], tasks: TaskSummary[]): VideoPageBatchOption[] {
+  return pages.map((page) => {
+    const tasksForPage = tasks.filter((task) => !isAggregateSummaryTask(task) && getTaskPageNumber(task) === page.page);
+    const latestTask = tasksForPage[0] ?? null;
+    return {
+      ...page,
+      aggregate_status: derivePageAggregateStatus(tasksForPage),
+      latest_task_status: latestTask?.status ?? null,
+      latest_task_updated_at: latestTask?.updated_at ?? null,
+      has_completed_result: tasksForPage.some((task) => task.status === "completed"),
+    };
+  });
+}
+
+export function filterTasksForPage(tasks: TaskSummary[], pageNumber: number | null): TaskSummary[] {
+  if (pageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER) {
+    return tasks.filter(isAggregateSummaryTask);
+  }
+  if (pageNumber == null) {
+    return tasks.filter((task) => !isAggregateSummaryTask(task));
+  }
+  return tasks.filter((task) => !isAggregateSummaryTask(task) && getTaskPageNumber(task) === pageNumber);
+}
 
 export function describeUserFacingErrorMessage(rawMessage?: string | null): string {
   const message = String(rawMessage || "").trim();

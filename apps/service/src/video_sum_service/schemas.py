@@ -25,6 +25,10 @@ class VideoTaskBatchRequest(BaseModel):
     confirm: bool = False
 
 
+class AggregateSummaryRequest(BaseModel):
+    page_numbers: list[int] | None = None
+
+
 class VideoTaskBatchPageResponse(BaseModel):
     page_number: int
     page_title: str | None = None

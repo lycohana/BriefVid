@@ -168,6 +168,13 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  createAggregateSummaryTask(videoId: string, payload?: { page_numbers?: number[] | null }) {
+    return fetchJson<TaskDetail>(`/api/v1/videos/${videoId}/tasks/aggregate-summary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    });
+  },
   getTaskResult(taskId: string) {
     return fetchJson<TaskDetail>(`/api/v1/tasks/${taskId}/result`);
   },

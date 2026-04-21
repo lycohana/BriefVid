@@ -10,18 +10,24 @@ import { MarkdownContent } from "../components/MarkdownContent";
 import { MultiPageSelectDialog } from "../components/MultiPageSelectDialog";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import {
+  AGGREGATE_SUMMARY_PAGE_NUMBER,
+  buildVideoPageBatchOptions,
   buildChapterGroups,
   buildKnowledgeCards,
   describeMindMapWorkspace,
   describeTaskContentState,
   describeUserFacingErrorMessage,
+  filterTasksForPage,
+  getTaskPageNumber,
+  isAggregateSummaryTask,
   pickDetailTaskId,
   resolveKnowledgeNoteMarkdown,
+  taskPageLabel,
   type DetailTab,
   type KnowledgeCard,
   type TaskPanelState,
 } from "../detailModel";
-import type { MindMapNode, PageAggregateStatus, TaskDetail, TaskEvent, TaskMindMapResponse, TaskStatus, TaskSummary, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse } from "../types";
+import type { MindMapNode, TaskDetail, TaskEvent, TaskMindMapResponse, TaskStatus, TaskSummary, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse } from "../types";
 import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents, taskStatusLabel } from "../utils";
 import { buildPlayerEmbedDescriptor, withPlayerSeek } from "../videoPlayer";
 
@@ -136,19 +142,6 @@ function compareTasksByRecent(left: TaskSummary, right: TaskSummary) {
 
 function hasGeneratedResult(task: TaskSummary) {
   return task.status === "completed";
-}
-
-function derivePageAggregateStatus(tasks: TaskSummary[]): PageAggregateStatus {
-  if (tasks.some((task) => task.status === "running" || task.status === "queued")) {
-    return "in_progress";
-  }
-  if (tasks.some((task) => task.status === "completed")) {
-    return "completed";
-  }
-  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled")) {
-    return "failed";
-  }
-  return "not_started";
 }
 
 function buildTaskSnapshot(task?: Pick<TaskSummary, "created_at" | "updated_at" | "llm_total_tokens" | "task_duration_seconds"> | null): SnapshotMetric[] {
@@ -468,26 +461,20 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
 
   const orderedTasks = useMemo(() => [...tasks].sort(compareTasksByRecent), [tasks]);
   const availablePages = video?.pages ?? [];
+  const aggregateSummaryTasks = useMemo(() => orderedTasks.filter(isAggregateSummaryTask), [orderedTasks]);
   const pageGeneratedMap = useMemo(() => {
     const nextMap = new Map<number, boolean>();
     for (const task of orderedTasks) {
-      const pageNumber = task.page_number ?? 1;
+      if (isAggregateSummaryTask(task)) {
+        continue;
+      }
+      const pageNumber = getTaskPageNumber(task);
       nextMap.set(pageNumber, Boolean(nextMap.get(pageNumber)) || hasGeneratedResult(task));
     }
     return nextMap;
   }, [orderedTasks]);
   const pageBatchOptions = useMemo<VideoPageBatchOption[]>(() => {
-    return availablePages.map((page) => {
-      const tasksForPage = orderedTasks.filter((task) => (task.page_number ?? 1) === page.page);
-      const latestTask = tasksForPage[0] ?? null;
-      return {
-        ...page,
-        aggregate_status: derivePageAggregateStatus(tasksForPage),
-        latest_task_status: latestTask?.status ?? null,
-        latest_task_updated_at: latestTask?.updated_at ?? null,
-        has_completed_result: tasksForPage.some((task) => task.status === "completed"),
-      };
-    });
+    return buildVideoPageBatchOptions(availablePages, orderedTasks);
   }, [availablePages, orderedTasks]);
   const pageBatchSummary = useMemo(() => {
     return pageBatchOptions.reduce(
@@ -507,13 +494,16 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       { total: 0, completed: 0, inProgress: 0, notStarted: 0, failed: 0 },
     );
   }, [pageBatchOptions]);
+  const canCreateAggregateSummary = pageBatchOptions.some((page) => page.has_completed_result);
+  const canShowAggregateSummaryOption = availablePages.length > 0 && (aggregateSummaryTasks.length > 0 || canCreateAggregateSummary);
   const effectivePageNumber = selectedPageNumber ?? availablePages[0]?.page ?? null;
+  const isAggregateSummaryView = effectivePageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER;
   const currentPage = availablePages.find((page) => page.page === effectivePageNumber) ?? null;
   const pageTasks = useMemo(() => {
     if (!availablePages.length || effectivePageNumber == null) {
-      return orderedTasks;
+      return orderedTasks.filter((task) => !isAggregateSummaryTask(task));
     }
-    return orderedTasks.filter((task) => (task.page_number ?? 1) === effectivePageNumber);
+    return filterTasksForPage(orderedTasks, effectivePageNumber);
   }, [availablePages.length, effectivePageNumber, orderedTasks]);
   const latestTaskId = pageTasks[0]?.task_id ?? null;
   const latestTaskSummary = pageTasks[0] ?? null;
@@ -544,9 +534,12 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     if (selectedPageNumber && availablePages.some((page) => page.page === selectedPageNumber)) {
       return;
     }
-    const preferredPage = orderedTasks.find((task) => task.page_number != null)?.page_number ?? availablePages[0]?.page ?? null;
+    if (selectedPageNumber === AGGREGATE_SUMMARY_PAGE_NUMBER && canShowAggregateSummaryOption) {
+      return;
+    }
+    const preferredPage = orderedTasks.find((task) => task.page_number != null && task.page_number > 0)?.page_number ?? availablePages[0]?.page ?? null;
     setSelectedPageNumber(preferredPage);
-  }, [availablePages, orderedTasks, selectedPageNumber]);
+  }, [availablePages, canShowAggregateSummaryOption, orderedTasks, selectedPageNumber]);
 
   useEffect(() => {
     const nextSelectedTaskId = pickDetailTaskId(pageTasks, selectedTaskIdRef.current);
@@ -871,15 +864,20 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
         : "已准备";
   const heroStats: HeroStat[] = [
     { id: "progress", label: "最新运行", value: heroProgressSummary },
-    { id: "content", label: "当前查看", value: currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务", mono: true },
+    {
+      id: "content",
+      label: "当前查看",
+      value: isAggregateSummaryView ? "全集总结" : currentPage ? `P${currentPage.page}` : selectedTaskCode ? `任务 ${selectedTaskCode}` : "暂无任务",
+      mono: true,
+    },
   ];
   const batchCompletionCount = pageBatchSummary.completed;
   const batchProgressPercent = pageBatchSummary.total > 0
     ? Math.max(0, Math.min(100, Math.round((batchCompletionCount / pageBatchSummary.total) * 100)))
     : 0;
   const playerDescriptor = useMemo(
-    () => buildPlayerEmbedDescriptor(currentPage?.source_url || video?.source_url),
-    [currentPage?.source_url, video?.source_url],
+    () => isAggregateSummaryView ? null : buildPlayerEmbedDescriptor(currentPage?.source_url || video?.source_url),
+    [currentPage?.source_url, isAggregateSummaryView, video?.source_url],
   );
   const playerEmbedUrl = useMemo(() => {
     if (!playerDescriptor) {
@@ -889,6 +887,9 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
   }, [playerDescriptor, playerSeekTarget]);
   const localPlayerUrl = useMemo(() => {
     if (!video || String(video.platform || "").toLowerCase() !== "local") {
+      return null;
+    }
+    if (isAggregateSummaryView) {
       return null;
     }
     const source = currentPage?.source_url || video.source_url;
@@ -901,7 +902,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
       }
     })();
     return LOCAL_VIDEO_SUFFIXES.has(suffix) ? `/api/v1/videos/${video.video_id}/media` : null;
-  }, [currentPage?.source_url, video]);
+  }, [currentPage?.source_url, isAggregateSummaryView, video]);
   const hasSeekablePlayer = Boolean(localPlayerUrl || playerDescriptor);
   const readyMindMap = selectedMindMap?.status === "ready" && selectedTaskDetail?.result?.mindmap_status !== "generating"
     ? selectedMindMap.mindmap ?? null
@@ -1055,6 +1056,27 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
     }
   }
 
+  async function handleCreateAggregateSummary() {
+    if (!video) {
+      return;
+    }
+    setActionMenuOpen(false);
+    setActionMenuSection(null);
+    setStatus("正在创建全集总结任务...");
+    try {
+      const response = await api.createAggregateSummaryTask(video.video_id);
+      setSelectedPageNumber(AGGREGATE_SUMMARY_PAGE_NUMBER);
+      await refreshDetail({
+        forceTaskIds: [response.task_id],
+        preferredTaskId: response.task_id,
+        syncLibrary: true,
+      });
+      setStatus("已开始生成全集总结");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "全集总结创建失败");
+    }
+  }
+
   async function handleSubmitBatchAction(input: { pageNumbers: number[]; confirm: boolean }): Promise<VideoTaskBatchResponse> {
     if (!video) {
       throw new Error("当前视频信息不可用，请稍后重试。");
@@ -1173,7 +1195,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
               <h2 className="video-detail-title">{video.title}</h2>
               {availablePages.length ? (
                 <div className={`detail-page-switcher ${pageMenuOpen ? "is-open" : ""}`} ref={pageSwitcherRef}>
-                  <span className="detail-page-switcher-label">当前分P</span>
+                  <span className="detail-page-switcher-label">当前内容</span>
                   <button
                     className="detail-page-select"
                     type="button"
@@ -1182,14 +1204,33 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                     onClick={() => setPageMenuOpen((current) => !current)}
                   >
                     <span className="detail-page-select-value">
-                      {currentPage?.title || "选择分 P"}
+                      {isAggregateSummaryView ? "全集总结" : currentPage?.title || "选择分 P"}
                       {currentPage && pageGeneratedMap.get(currentPage.page) ? <span className="detail-page-select-check">✓</span> : null}
+                      {isAggregateSummaryView && aggregateSummaryTasks.some((task) => task.status === "completed") ? <span className="detail-page-select-check">✓</span> : null}
                     </span>
                     <IconChevronDown className="detail-page-select-caret" />
                   </button>
                   {pageMenuOpen ? (
                     <div className="detail-page-menu">
                       <div className="detail-page-menu-scroll" role="listbox" aria-label="选择当前分 P">
+                        {canShowAggregateSummaryOption ? (
+                          <button
+                            className={`detail-page-option ${isAggregateSummaryView ? "is-selected" : ""}`}
+                            role="option"
+                            aria-selected={isAggregateSummaryView}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPageNumber(AGGREGATE_SUMMARY_PAGE_NUMBER);
+                              setPageMenuOpen(false);
+                            }}
+                          >
+                            <span className={`detail-page-option-check ${isAggregateSummaryView ? "is-selected" : ""}`}>{isAggregateSummaryView ? "✓" : ""}</span>
+                            <span className="detail-page-option-copy">
+                              <strong>全集总结</strong>
+                              {aggregateSummaryTasks.length ? <small>已有 {aggregateSummaryTasks.length} 个版本</small> : <small>可基于已完成分 P 生成</small>}
+                            </span>
+                          </button>
+                        ) : null}
                         {availablePages.map((page) => {
                           const selected = page.page === effectivePageNumber;
                           const generated = pageGeneratedMap.get(page.page);
@@ -1322,6 +1363,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                               role="menuitem"
                               type="button"
                               tabIndex={actionMenuSection === "regenerate" ? 0 : -1}
+                              disabled={isAggregateSummaryView}
                               onClick={async () => {
                                 setActionMenuOpen(false);
                                 setActionMenuSection(null);
@@ -1382,6 +1424,17 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                             >
                               <IconSummaryRefresh className="detail-action-icon" />
                               <span>批量重生成摘要</span>
+                            </button>
+                            <button
+                              className="detail-action-subitem"
+                              role="menuitem"
+                              type="button"
+                              tabIndex={actionMenuSection === "batch" ? 0 : -1}
+                              disabled={!canCreateAggregateSummary}
+                              onClick={() => void handleCreateAggregateSummary()}
+                            >
+                              <IconFileText className="detail-action-icon" />
+                              <span>生成全集总结</span>
                             </button>
                           </div>
 
@@ -1573,7 +1626,7 @@ export function VideoDetailPage({ onRefresh }: { onRefresh(): void }) {
                                         <span className={`task-status ${taskStatusClass(task.status)}`}>{taskStatusLabel(task.status)}</span>
                                         {isLatestTask ? <span className="helper-chip">最新任务</span> : null}
                                         {isSelected ? <span className="helper-chip status-success">当前查看</span> : null}
-                                        {task.page_number ? <span className="helper-chip">P{task.page_number}</span> : null}
+                                        {taskPageLabel(task) ? <span className="helper-chip">{taskPageLabel(task)}</span> : null}
                                       </div>
                                       <strong>{task.title || video.title}</strong>
                                       <small>{formatDateTime(task.created_at)}</small>
