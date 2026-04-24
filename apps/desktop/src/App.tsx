@@ -19,6 +19,7 @@ import { HomeIcon, KnowledgeIcon, LibraryIcon, SettingsIcon } from "./components
 import { CookieHelpDialog } from "./components/CookieHelpDialog";
 import { MultiPageSelectDialog } from "./components/MultiPageSelectDialog";
 import { SetupAssistantDialog } from "./components/SetupAssistantDialog";
+import { StartupAnnouncementDialog, type StartupAnnouncement } from "./components/StartupAnnouncementDialog";
 import { TitleBar } from "./components/TitleBar";
 import { UpdateDialog, type UpdateInfo } from "./components/UpdateDialog";
 import { HomePage } from "./pages/HomePage";
@@ -64,6 +65,7 @@ export function App() {
   });
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [startupAnnouncement, setStartupAnnouncement] = useState<StartupAnnouncement | null>(null);
   const [setupAssistantOpen, setSetupAssistantOpen] = useState(false);
   const [cookieHelpDialogOpen, setCookieHelpDialogOpen] = useState(false);
   const [setupAssistantDismissed, setSetupAssistantDismissed] = useState(false);
@@ -93,14 +95,16 @@ export function App() {
 
     async function bootstrap() {
       if (!window.desktop) return;
-      const [version, backend, logPath, currentUpdateStatus] = await Promise.all([
+      const [version, backend, logPath, currentUpdateStatus, announcement] = await Promise.all([
         window.desktop.app.getVersion(),
         window.desktop.backend.status(),
         window.desktop.logs.getServiceLogPath(),
         window.desktop.update?.getStatus?.() ?? Promise.resolve(null),
+        window.desktop.app.getStartupAnnouncement?.() ?? Promise.resolve(null),
       ]);
       if (disposed) return;
       setDesktop({ version, backend, logPath });
+      setStartupAnnouncement(announcement);
       if (currentUpdateStatus) {
         setUpdateState(toUpdateState(currentUpdateStatus));
       }
@@ -154,6 +158,14 @@ export function App() {
 
   function closeUpdateDialog() {
     setUpdateDialogOpen(false);
+  }
+
+  async function closeStartupAnnouncement() {
+    const announcement = startupAnnouncement;
+    setStartupAnnouncement(null);
+    if (announcement) {
+      await window.desktop?.app.markStartupAnnouncementSeen?.(announcement.version);
+    }
   }
 
   const updateDialogSignal = useMemo(
@@ -764,6 +776,10 @@ export function App() {
         onCheck={handleCheckForUpdates}
         onDownload={handleDownloadUpdate}
         onInstall={handleInstallUpdate}
+      />
+      <StartupAnnouncementDialog
+        announcement={startupAnnouncement}
+        onClose={() => void closeStartupAnnouncement()}
       />
       <MultiPageSelectDialog
         isOpen={multiPageDialogOpen}

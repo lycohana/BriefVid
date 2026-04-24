@@ -25,6 +25,8 @@ type DesktopPreferences = {
   closeBehavior: CloseBehavior;
   rememberCloseBehavior: boolean;
   autoLaunch: boolean;
+  lastOpenedVersion?: string;
+  lastSeenAnnouncementVersion?: string;
 };
 
 type BackendStatus = {
@@ -44,6 +46,12 @@ type UpdateInfo = {
   releaseNotes: string | null;
   downloadProgress: number;
   errorMessage: string | null;
+};
+
+type StartupAnnouncement = {
+  version: string;
+  title: string;
+  content: string;
 };
 
 type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
@@ -111,6 +119,7 @@ const iconPath = isDev
   ? path.resolve(repoRoot, "apps/desktop/build/icon.ico")
   : path.join(process.resourcesPath, "icon.ico");
 const preferencesPath = path.join(app.getPath("userData"), "desktop-preferences.json");
+const preferencesFileExistedAtLaunch = fs.existsSync(preferencesPath);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -659,6 +668,65 @@ function resetCloseBehavior(): CloseBehavior {
   preferences = { ...preferences, closeBehavior: "ask", rememberCloseBehavior: false };
   savePreferences();
   return "ask";
+}
+
+function getAnnouncementPath() {
+  return path.join(app.getAppPath(), "announcement.md");
+}
+
+function readStartupAnnouncementContent() {
+  try {
+    return fs.readFileSync(getAnnouncementPath(), "utf-8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function shouldShowStartupAnnouncement() {
+  const currentVersion = desktopAppVersion || app.getVersion();
+  if (!currentVersion) {
+    return false;
+  }
+  if (preferences.lastSeenAnnouncementVersion === currentVersion) {
+    return false;
+  }
+  if (preferences.lastOpenedVersion && preferences.lastOpenedVersion !== currentVersion) {
+    return true;
+  }
+  return preferencesFileExistedAtLaunch && !preferences.lastOpenedVersion;
+}
+
+function getStartupAnnouncement(): StartupAnnouncement | null {
+  const content = readStartupAnnouncementContent();
+  if (!content || !shouldShowStartupAnnouncement()) {
+    return null;
+  }
+  return {
+    version: desktopAppVersion || app.getVersion(),
+    title: "更新公告",
+    content,
+  };
+}
+
+function markStartupAnnouncementSeen(version: string) {
+  const currentVersion = desktopAppVersion || app.getVersion();
+  preferences = {
+    ...preferences,
+    lastOpenedVersion: currentVersion,
+    lastSeenAnnouncementVersion: version || currentVersion,
+  };
+  savePreferences();
+}
+
+function recordOpenedVersionIfNoAnnouncement() {
+  if (getStartupAnnouncement()) {
+    return;
+  }
+  const currentVersion = desktopAppVersion || app.getVersion();
+  if (preferences.lastOpenedVersion !== currentVersion) {
+    preferences = { ...preferences, lastOpenedVersion: currentVersion };
+    savePreferences();
+  }
 }
 
 function getStartupHidden(): boolean {
@@ -1539,6 +1607,8 @@ function registerIpcHandlers() {
   ipcMain.handle("desktop:app:get-version", () => desktopAppVersion || app.getVersion());
   ipcMain.handle("desktop:app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
   ipcMain.handle("desktop:app:set-auto-launch", (_event, enabled: boolean) => setAutoLaunch(Boolean(enabled)));
+  ipcMain.handle("desktop:app:get-startup-announcement", () => getStartupAnnouncement());
+  ipcMain.handle("desktop:app:mark-startup-announcement-seen", (_event, version: string) => markStartupAnnouncementSeen(version));
   ipcMain.handle("desktop:window:show", () => {
     mainWindow?.show();
     mainWindow?.focus();
@@ -1616,6 +1686,7 @@ if (!gotLock) {
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
+  recordOpenedVersionIfNoAnnouncement();
   initializeUpdater();
   createWindow();
   createTray();

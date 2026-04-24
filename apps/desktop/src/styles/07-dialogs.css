@@ -220,8 +220,17 @@
   width: min(620px, calc(100vw - 40px));
 }
 
+.startup-announcement-dialog {
+  width: min(680px, calc(100vw - 40px));
+}
+
 .setup-assistant-body,
 .cookie-help-body {
+  display: grid;
+  gap: 18px;
+}
+
+.startup-announcement-body {
   display: grid;
   gap: 18px;
 }
@@ -251,6 +260,28 @@
   margin: 0;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+.startup-announcement-hero {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+}
+
+.startup-announcement-hero strong {
+  font-size: 1.04rem;
+}
+
+.startup-announcement-content.markdown-content {
+  max-width: none;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-secondary);
 }
 
 .cookie-help-summary {

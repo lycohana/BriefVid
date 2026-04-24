@@ -19,6 +19,12 @@ type UpdateInfo = {
   errorMessage: string | null;
 };
 
+type StartupAnnouncement = {
+  version: string;
+  title: string;
+  content: string;
+};
+
 type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
 
 type StorageDirectoryStat = {
@@ -68,6 +74,8 @@ type DesktopBridge = {
     getVersion(): Promise<string>;
     getAutoLaunch(): Promise<boolean>;
     setAutoLaunch(enabled: boolean): Promise<boolean>;
+    getStartupAnnouncement(): Promise<StartupAnnouncement | null>;
+    markStartupAnnouncementSeen(version: string): Promise<void>;
   };
   window: {
     show(): Promise<void>;

@@ -1,11 +1,14 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
+from video_sum_core.markdown_exports import build_export_filename
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
 from video_sum_infra.config import ServiceSettings
+from video_sum_service import task_exports
 from video_sum_service.app import app, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import VideoAssetRecord
@@ -99,12 +102,24 @@ def test_export_task_markdown_writes_file_and_persists_artifact(tmp_path: Path) 
     assert "## 关键要点" in content
 
 
-def test_export_task_markdown_avoids_overwriting_existing_file(tmp_path: Path) -> None:
+def test_export_task_markdown_avoids_overwriting_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixed_export_time = datetime.fromisoformat("2026-04-22T12:00:00+08:00")
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_export_time
+            return fixed_export_time.astimezone(tz)
+
+    monkeypatch.setattr(task_exports, "datetime", FixedDatetime)
     repository = create_repository()
     task_id = create_completed_task(repository)
     output_dir = tmp_path / "vault"
     output_dir.mkdir(parents=True, exist_ok=True)
-    existing = output_dir / "测试导出视频 2026-04-22.md"
+    existing = output_dir / build_export_filename("测试导出视频", fixed_export_time)
     existing.write_text("old", encoding="utf-8")
 
     app.state.task_repository = repository

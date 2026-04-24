@@ -52,6 +52,12 @@ export type UpdateInfo = {
   errorMessage: string | null;
 };
 
+export type StartupAnnouncement = {
+  version: string;
+  title: string;
+  content: string;
+};
+
 export type StorageLocationKind = "data" | "cache" | "tasks" | "logs" | "runtime";
 
 export type StorageDirectoryStat = {
@@ -100,6 +106,10 @@ const desktop = {
     getAutoLaunch: () => ipcRenderer.invoke("desktop:app:get-auto-launch") as Promise<boolean>,
     setAutoLaunch: (enabled: boolean) =>
       ipcRenderer.invoke("desktop:app:set-auto-launch", enabled) as Promise<boolean>,
+    getStartupAnnouncement: () =>
+      ipcRenderer.invoke("desktop:app:get-startup-announcement") as Promise<StartupAnnouncement | null>,
+    markStartupAnnouncementSeen: (version: string) =>
+      ipcRenderer.invoke("desktop:app:mark-startup-announcement-seen", version) as Promise<void>,
   },
   window: {
     show: () => ipcRenderer.invoke("desktop:window:show") as Promise<void>,
