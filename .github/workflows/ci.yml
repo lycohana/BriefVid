@@ -97,9 +97,6 @@ jobs:
       - name: Verify version files are synced
         run: python scripts/bump_version.py --check
 
-      - name: Validate npx package
-        run: npm run npx:test
-
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip pytest
@@ -115,6 +112,9 @@ jobs:
 
       - name: Build desktop app
         run: npm run build
+
+      - name: Validate npx package
+        run: npm run npx:test
 
   validate-windows-package:
     needs: detect-windows-package-check

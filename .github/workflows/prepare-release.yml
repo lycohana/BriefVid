@@ -346,10 +346,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
           registry-url: https://registry.npmjs.org
 
       - name: Update npm
         run: npm install -g npm@latest
+
+      - name: Install desktop dependencies
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop
+
+      - name: Build web static assets
+        run: npm run build:web
 
       - name: Validate npx package
         run: npm run npx:test

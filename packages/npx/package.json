@@ -1,14 +1,19 @@
 {
   "name": "bilisum",
-  "version": "1.13.2",
-  "description": "Start BiliSum from npx with the official Docker image.",
+  "version": "1.13.3",
+  "description": "Start the local BiliSum service from npx.",
   "bin": {
     "bilisum": "bin/bilisum.js"
   },
   "files": [
     "bin",
+    "runtime",
     "README.md"
   ],
+  "scripts": {
+    "prepack": "node scripts/prepare-runtime.js",
+    "postpack": "node scripts/cleanup-runtime.js"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -31,5 +36,8 @@
   "license": "MIT",
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "bilisum": "^1.13.3"
   }
 }
